@@ -1,5 +1,4 @@
--- UNANCHORED MANIPULATOR KII VERSION
--- GALAXY THEMED UNANCHORED MANIPULATOR SYSTEM
+-- Copy this entire script into Delta executor and run it directly:
 
 local player = game:GetService("Players").LocalPlayer
 local runService = game:GetService("RunService")
@@ -367,6 +366,7 @@ local function createMiniIcon()
     star.Parent = iconFrame
     
     -- Click to reopen
+    iconFrame.MouseButton
     iconFrame.MouseButton1Click:Connect(function()
         iconGui:Destroy()
         createGalaxyGUI()
@@ -383,8 +383,7 @@ local function removeManipulatorParts()
         end
     end
     manipulatorParts = {}
-
--- CONTINUATION OF UNANCHORED MANIPULATOR KII VERSION
+end
 
 -- Create unanchored parts for manipulation
 local function createManipulatorParts()
