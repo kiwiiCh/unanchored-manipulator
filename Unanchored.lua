@@ -1,6 +1,7 @@
--- UNANCHORED MANIPULATOR KII — GASTER UPDATE (COMPLETE)
+-- UNANCHORED MANIPULATOR KII — FULL UPDATE
 local Players          = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
+local RunService       = game:GetService("RunService")
 
 local player = Players.LocalPlayer
 
@@ -17,43 +18,52 @@ local function main()
     local gasterAnim   = "pointing"
     local gasterT      = 0
     local gasterSubGui = nil
+    local sphereSubGui = nil
+
+    -- Sphere mode state
+    local sphereMode       = "orbit"  -- "orbit", "stay", "follow"
+    local spherePos        = Vector3.new(0, 0, 0)
+    local sphereVel        = Vector3.new(0, 0, 0)
+    local sphereOrbitAngle = 0
+    local SPHERE_RADIUS    = 6   -- orbit distance
+    local SPHERE_SPEED     = 1.2 -- orbit speed
+    local SPHERE_SPRING    = 8   -- follow spring strength
+    local SPHERE_DAMP      = 4   -- follow damping
 
     local CFRAME_MODES = {
         heart=true, rings=true, wall=true, box=true,
-        gasterhand=true, gaster2hands=true, wings=true
+        gasterhand=true, gaster2hands=true, wings=true,
+        sphere=true
     }
-    local GASTER_MODES = { gasterhand=true, gaster2hands=true }
+    local GASTER_MODES  = { gasterhand=true, gaster2hands=true }
+    local SPHERE_MODES  = { sphere=true }
 
     local HAND_SCALE = 2.8
 
     -- ── FINGER SLOTS ─────────────────────────────────────────────────────
     local HAND_SLOTS = {
-        {x=-4, y=5}, {x=-4, y=4}, {x=-4, y=3}, {x=-4, y=2},
-        {x=-2, y=6}, {x=-2, y=5}, {x=-2, y=4}, {x=-2, y=3},
-        {x= 0, y=7}, {x= 0, y=6}, {x= 0, y=5}, {x= 0, y=4}, {x= 0, y=3},
-        {x= 2, y=6}, {x= 2, y=5}, {x= 2, y=4}, {x= 2, y=3},
-        {x= 5, y=2}, {x= 5, y=1}, {x= 5, y=0},
-        {x=-4, y=1}, {x=-2, y=1}, {x= 0, y=1}, {x= 2, y=1},
-        {x=-4, y=0}, {x=-2, y=0}, {x= 0, y=0}, {x= 2, y=0}, {x= 4, y=0},
-        {x=-2, y=-1}, {x= 0, y=-1}, {x= 2, y=-1},
+        {x=-4,y=5},{x=-4,y=4},{x=-4,y=3},{x=-4,y=2},
+        {x=-2,y=6},{x=-2,y=5},{x=-2,y=4},{x=-2,y=3},
+        {x= 0,y=7},{x= 0,y=6},{x= 0,y=5},{x= 0,y=4},{x= 0,y=3},
+        {x= 2,y=6},{x= 2,y=5},{x= 2,y=4},{x= 2,y=3},
+        {x= 5,y=2},{x= 5,y=1},{x= 5,y=0},
+        {x=-4,y=1},{x=-2,y=1},{x= 0,y=1},{x= 2,y=1},
+        {x=-4,y=0},{x=-2,y=0},{x= 0,y=0},{x= 2,y=0},{x= 4,y=0},
+        {x=-2,y=-1},{x= 0,y=-1},{x= 2,y=-1},
     }
-
-    -- ── PALM SLOTS ───────────────────────────────────────────────────────
     local PALM_SLOTS = {
-        {x=-3, y= 2}, {x=-1, y= 2}, {x= 1, y= 2}, {x= 3, y= 2},
-        {x=-3, y= 1}, {x=-1, y= 1}, {x= 1, y= 1}, {x= 3, y= 1},
-        {x=-3, y= 0}, {x=-1, y= 0}, {x= 1, y= 0}, {x= 3, y= 0},
-        {x=-2, y=-1}, {x= 0, y=-1}, {x= 2, y=-1},
-        {x=-2, y=-2}, {x= 0, y=-2}, {x= 2, y=-2},
+        {x=-3,y= 2},{x=-1,y= 2},{x= 1,y= 2},{x= 3,y= 2},
+        {x=-3,y= 1},{x=-1,y= 1},{x= 1,y= 1},{x= 3,y= 1},
+        {x=-3,y= 0},{x=-1,y= 0},{x= 1,y= 0},{x= 3,y= 0},
+        {x=-2,y=-1},{x= 0,y=-1},{x= 2,y=-1},
+        {x=-2,y=-2},{x= 0,y=-2},{x= 2,y=-2},
     }
-
-    -- ── COMBINED HAND SLOTS ──────────────────────────────────────────────
     local ALL_HAND_SLOTS = {}
-    for _, s in ipairs(HAND_SLOTS) do
-        table.insert(ALL_HAND_SLOTS, {x=s.x, y=s.y, isPalm=false})
+    for _,s in ipairs(HAND_SLOTS) do
+        table.insert(ALL_HAND_SLOTS,{x=s.x,y=s.y,isPalm=false})
     end
-    for _, s in ipairs(PALM_SLOTS) do
-        table.insert(ALL_HAND_SLOTS, {x=s.x, y=s.y, isPalm=true})
+    for _,s in ipairs(PALM_SLOTS) do
+        table.insert(ALL_HAND_SLOTS,{x=s.x,y=s.y,isPalm=true})
     end
     local HAND_SLOTS_COUNT = #ALL_HAND_SLOTS
 
@@ -70,107 +80,131 @@ local function main()
         [14]=-3.0,[15]=-2.5,[16]=-1.5,[17]=-0.5,
         [18]=-0.8,[19]=-1.4,[20]=-1.4,
     }
+    local HAND_RIGHT = Vector3.new( 9,2,1)
+    local HAND_LEFT  = Vector3.new(-9,2,1)
 
-    local HAND_RIGHT = Vector3.new( 9, 2, 1)
-    local HAND_LEFT  = Vector3.new(-9, 2, 1)
-
-    -- ═══════════════════════════════════════════════════════════════
+    -- ═══════════════════════════════════════════════════════════════════
     -- ANGEL WING BLUEPRINT
-    -- The wing is built in LOCAL space relative to the shoulder.
-    -- outX = how far outward from body (positive = away from body)
-    -- baseY = vertical position (0 = shoulder height)
-    -- baseZ = forward/back offset for feather layering
-    -- layer = 1 primary (longest), 2 secondary, 3 covert (base)
+    -- Completely rebuilt. Wings attach to the BACK of the avatar.
+    -- Hinge point is on the upper back, wings extend OUTWARD and
+    -- slightly BEHIND the avatar so they never clip through the body.
     --
-    -- RIGHT WING viewed from above (Z = forward):
+    -- Wing structure (right wing, left is mirrored on X):
     --
-    --  Body
-    --   |
-    --   |  [3:covert]  short feathers near shoulder
-    --   |  [2:secondary] medium arc sweeping out+up
-    --   |  [1:primary]  long feathers sweeping out+down in arc
-    --   |
-    --   shoulder -----> outward (X)
+    --   BACK VIEW:
     --
-    -- The "door hinge" rotation pivots at the shoulder (outX=0)
-    -- Wing OPENS = rotates outward flat, CLOSES = folds against body
-    -- ═══════════════════════════════════════════════════════════════
+    --         covert (base feathers near spine)
+    --        /
+    --   spine -- secondary (mid feathers, sweep up+out)
+    --        \
+    --         primary (long feathers, sweep out then curve down)
+    --                  \
+    --                   tip (lowest point, outermost)
+    --
+    --   SIDE VIEW (Z axis = depth behind avatar):
+    --   Avatar body  |  Wing extends BEHIND (positive Z = behind)
+    --   [BODY]       |-->  Z+ behind
+    --
+    -- Door-hinge axis: the VERTICAL axis (Y) at the spine.
+    -- Open  = wings swing back and outward (like arms spreading)
+    -- Close = wings fold against the back
+    -- ═══════════════════════════════════════════════════════════════════
 
-    -- PRIMARY FEATHERS: long sweeping arc, 8 feathers per wing
-    -- They arc from shoulder height down to tip
-    -- outX goes 1..8, baseY curves downward like a real wing tip
     local WING_POINTS = {}
 
-    -- Primary feathers (longest, form the main wing shape)
-    -- Arc: starts at shoulder level, curves outward and downward
-    local primaryFeathers = {
-        -- {outX, baseY, baseZ}   outX=1 near body, outX=8 = tip
-        {1, 1.0,  0.0},
-        {2, 1.5,  0.1},
-        {3, 1.8,  0.2},
-        {4, 1.6,  0.2},
-        {5, 1.0,  0.1},
-        {6, 0.2,  0.0},
-        {7,-0.8, -0.1},
-        {8,-2.0, -0.2},  -- wingtip curves downward
+    -- WING_SHOULDER offsets from HumanoidRootPart (which is torso center):
+    -- X: small offset left/right from spine
+    -- Y: upper back height
+    -- Z: POSITIVE = behind avatar
+    local WING_SHOULDER_RIGHT = Vector3.new( 1.0,  1.8,  0.6)
+    local WING_SHOULDER_LEFT  = Vector3.new(-1.0,  1.8,  0.6)
+
+    -- Wing open/close angles around the VERTICAL spine axis
+    -- 0 = folded flat against back (wings pointing straight back)
+    -- 90 = fully open (wings pointing sideways)
+    local WING_OPEN_ANGLE   = math.rad(82)
+    local WING_CLOSE_ANGLE  = math.rad(22)
+    local WING_FLAP_SPEED   = 1.8  -- cycles per second
+
+    -- Blueprint: {outX, upY, backZ}
+    -- outX  = distance along wing span (away from spine)
+    -- upY   = height above shoulder attach point
+    -- backZ = depth behind avatar (always positive so wing is behind body)
+
+    -- PRIMARY FEATHERS: 9 feathers, each with 4 segments
+    -- They span outward and curve downward like real primary flight feathers
+    local primaryData = {
+        -- {spanFrac, tipY, backZ}  spanFrac 0=root 1=tip of wingspan
+        {0.15,  2.2,  0.4},
+        {0.28,  2.8,  0.5},
+        {0.40,  3.0,  0.6},
+        {0.52,  2.8,  0.6},
+        {0.63,  2.2,  0.5},
+        {0.73,  1.2,  0.4},
+        {0.82,  -0.2, 0.3},
+        {0.90,  -1.8, 0.2},
+        {0.97,  -3.5, 0.1},  -- wingtip, curves far down
     }
-    -- Each primary feather gets 3 parts (root, mid, tip) to show length
-    for fi, f in ipairs(primaryFeathers) do
+    local WING_SPAN = 14  -- max stud span per wing
+
+    for fi, f in ipairs(primaryData) do
+        for seg = 1, 4 do
+            local t2 = (seg-1)/3  -- 0..1 along feather length
+            -- Feathers get thinner/longer toward tip
+            -- Each segment steps outward along the feather axis
+            local spanPos = f[1] * WING_SPAN
+            -- Feather axis: mostly outward, slightly downward
+            local featherDX = t2 * 0.6   -- feather extends slightly more outward
+            local featherDY = -t2 * 2.0  -- feather droops downward
+            local featherDZ = t2 * 0.2   -- slight forward taper
+            table.insert(WING_POINTS, {
+                outX  = spanPos + featherDX,
+                upY   = f[2] + featherDY,
+                backZ = f[3] + featherDZ,
+                layer = 1,
+            })
+        end
+    end
+
+    -- SECONDARY FEATHERS: 6 feathers, 3 segments each
+    -- Upper arc of wing, shorter than primaries
+    local secondaryData = {
+        {0.12, 3.5, 0.6},
+        {0.22, 4.4, 0.7},
+        {0.33, 5.0, 0.8},
+        {0.44, 5.0, 0.8},
+        {0.54, 4.4, 0.7},
+        {0.62, 3.4, 0.6},
+    }
+    for fi, f in ipairs(secondaryData) do
         for seg = 1, 3 do
-            -- seg=1 root (near body), seg=3 = tip of feather
-            local taper = (seg - 1) / 2  -- 0, 0.5, 1
+            local t2 = (seg-1)/2
             table.insert(WING_POINTS, {
-                outX   = f[1] * 2.2 + taper * 0.8,
-                baseY  = f[2] - taper * 1.2,  -- feathers angle downward
-                baseZ  = f[3] - taper * 0.3,
-                layer  = 1,
-                fi     = fi,
+                outX  = f[1]*WING_SPAN + t2*0.4,
+                upY   = f[2] - t2*1.2,
+                backZ = f[3],
+                layer = 2,
             })
         end
     end
 
-    -- Secondary feathers (medium length, upper part of wing)
-    -- Sit above the primaries, form the top arc of the wing
-    local secondaryFeathers = {
-        {1,  3.0,  0.3},
-        {2,  3.8,  0.4},
-        {3,  4.2,  0.4},
-        {4,  4.0,  0.3},
-        {5,  3.4,  0.2},
-        {6,  2.4,  0.1},
+    -- COVERT FEATHERS: 8 small base feathers near spine
+    local covertData = {
+        {0.04, 1.5, 0.5},
+        {0.08, 2.2, 0.6},
+        {0.12, 2.8, 0.7},
+        {0.18, 3.0, 0.7},
+        {0.04, 0.6, 0.5},
+        {0.08, 1.0, 0.6},
+        {0.14, 1.2, 0.6},
+        {0.20, 1.0, 0.5},
     }
-    for fi, f in ipairs(secondaryFeathers) do
-        for seg = 1, 2 do
-            local taper = (seg - 1)
-            table.insert(WING_POINTS, {
-                outX   = f[1] * 2.0 + taper * 0.5,
-                baseY  = f[2] - taper * 0.6,
-                baseZ  = f[3],
-                layer  = 2,
-                fi     = fi,
-            })
-        end
-    end
-
-    -- Covert feathers (short, at the base/shoulder of the wing)
-    -- These are the small feathers that cover the base
-    local covertFeathers = {
-        {0.5, 2.0,  0.5},
-        {1.0, 2.8,  0.6},
-        {1.5, 3.2,  0.6},
-        {2.0, 3.0,  0.5},
-        {2.5, 2.5,  0.4},
-        {0.5, 1.2,  0.4},
-        {1.0, 1.5,  0.5},
-        {1.5, 1.8,  0.5},
-    }
-    for _, f in ipairs(covertFeathers) do
+    for _, f in ipairs(covertData) do
         table.insert(WING_POINTS, {
-            outX  = f[1] * 2.0,
-            baseY = f[2],
-            baseZ = f[3],
+            outX  = f[1]*WING_SPAN,
+            upY   = f[2],
+            backZ = f[3],
             layer = 3,
-            fi    = 1,
         })
     end
 
@@ -249,9 +283,9 @@ local function main()
     -- ── BLACK HOLE FLING ──────────────────────────────────────────────────
     local function enableFling(part, data)
         if data.bav and data.bav.Parent then
-            data.bav.MaxTorque       = Vector3.new(1e6, 1e6, 1e6)
+            data.bav.MaxTorque       = Vector3.new(1e6,1e6,1e6)
             data.bav.AngularVelocity = Vector3.new(
-                math.random(-50,50), math.random(60,100), math.random(-50,50))
+                math.random(-50,50),math.random(60,100),math.random(-50,50))
         end
         if data.touchConn then data.touchConn:Disconnect() end
         data.touchConn = part.Touched:Connect(function(hit)
@@ -294,7 +328,7 @@ local function main()
 
         local bp        = Instance.new("BodyPosition")
         bp.Name         = "ManipBP"
-        bp.MaxForce     = Vector3.new(math.huge, math.huge, math.huge)
+        bp.MaxForce     = Vector3.new(math.huge,math.huge,math.huge)
         bp.P            = pullStrength
         bp.D            = pullStrength * 0.12
         bp.Position     = part.Position
@@ -307,11 +341,11 @@ local function main()
         bav.P               = 1e5
         bav.Parent          = part
 
-        local data = {bp=bp, bav=bav, touchConn=nil, origCC=origCC, ncc={}}
-        applyNoCollision(part, data)
+        local data = {bp=bp,bav=bav,touchConn=nil,origCC=origCC,ncc={}}
+        applyNoCollision(part,data)
 
         if CFRAME_MODES[activeMode] then bp.MaxForce = Vector3.zero end
-        if activeMode == "blackhole"  then enableFling(part, data) end
+        if activeMode == "blackhole" then enableFling(part,data) end
 
         controlled[part] = data
         partCount = partCount + 1
@@ -325,141 +359,181 @@ local function main()
 
     -- ── SNAKE ─────────────────────────────────────────────────────────────
     local function getSnakeTarget(i)
-        local idx = math.clamp(i * SNAKE_GAP, 1, math.max(1, #snakeHistory))
+        local idx = math.clamp(i*SNAKE_GAP,1,math.max(1,#snakeHistory))
         return snakeHistory[idx]
             or snakeHistory[#snakeHistory]
             or Vector3.zero
     end
 
     -- ═══════════════════════════════════════════════════════════════════════
-    -- WING ANIMATION — "DOOR HINGE" ROTATION
+    -- WING SYSTEM — DOOR HINGE ON BACK
     --
-    -- The entire wing rotates around the spine (X axis at body center).
-    -- Think of it like 2 doors: hinge at the body, door swings open/closed.
+    -- The hinge axis is VERTICAL (Y axis) at each shoulder point on the back.
+    -- Opening = wings swing outward away from spine (X axis)
+    -- The wing blueprint is in back-space:
+    --   outX  = along wing span (perpendicular to spine, horizontal)
+    --   upY   = vertical (up from shoulder)
+    --   backZ = depth behind avatar body
     --
-    -- OPEN  = wing rotates outward (away from body, nearly horizontal)
-    -- CLOSE = wing folds back toward body (nearly vertical beside body)
+    -- Hinge rotation rotates outX and backZ around Y axis:
+    --   newX = outX * cos(angle) - backZ * sin(angle)  [too much = clips body]
+    --   newZ = outX * sin(angle) + backZ * cos(angle)  [behind avatar]
     --
-    -- Rotation angle drives ALL points together so shape is preserved.
-    --
-    -- angleOpen  = most open position  (radians from vertical)
-    -- angleClose = most closed position
-    --
-    -- Each point is placed at its blueprint offset, then the whole set
-    -- is rotated around the shoulder hinge point.
+    -- At angle=0: wing points straight back (outX→Z, backZ stays Z)
+    -- At angle=90: wing points sideways (outX→X, perpendicular to back)
+    -- We keep angle between CLOSE(22°) and OPEN(82°) for natural flap
     -- ═══════════════════════════════════════════════════════════════════════
-
-    -- Wing hinge: attached at upper back, offset from root
-    local WING_SHOULDER_RIGHT = Vector3.new( 2.0, 2.5, 0.5)
-    local WING_SHOULDER_LEFT  = Vector3.new(-2.0, 2.5, 0.5)
-
-    local WING_OPEN_ANGLE  = math.rad(75)   -- open: 75° from vertical
-    local WING_CLOSE_ANGLE = math.rad(15)   -- closed: 15° from vertical
-    local WING_FLAP_SPEED  = 2.2            -- full flap cycles per second
 
     local function getWingCF(pointIndex, sideSign, cf, t)
         local wp = WING_POINTS[pointIndex]
-        if not wp then return CFrame.new(0, -5000, 0) end
+        if not wp then return CFrame.new(0,-5000,0) end
 
-        -- Current flap angle oscillates between close and open
-        -- using a smooth sine wave — like a door swinging
-        local rawSin   = math.sin(t * WING_FLAP_SPEED * math.pi)
-        -- Remap from [-1,1] to [CLOSE, OPEN]
-        local flapT    = (rawSin + 1) / 2  -- now 0..1
+        -- Smooth door-hinge flap using sine
+        local rawSin    = math.sin(t * WING_FLAP_SPEED * math.pi)
+        local flapT     = (rawSin + 1) / 2
         local flapAngle = WING_CLOSE_ANGLE
             + flapT * (WING_OPEN_ANGLE - WING_CLOSE_ANGLE)
 
-        -- Blueprint position of this point in wing-local space
-        -- outX goes away from body, baseY is up, baseZ is forward
-        local bpX = wp.outX   -- outward distance from shoulder
-        local bpY = wp.baseY  -- height above shoulder
-        local bpZ = wp.baseZ  -- forward/back from shoulder
-
-        -- Apply door-hinge rotation:
-        -- The hinge axis is the character's forward/back axis (Z axis).
-        -- outX and baseY rotate together around this hinge.
-        --
-        -- Without rotation: outX goes along RightVector, baseY goes up
-        -- After rotation by flapAngle from vertical:
-        --   rotatedX = outX * cos(flapAngle) - baseY * sin(flapAngle)  [horizontal]
-        --   rotatedY = outX * sin(flapAngle) + baseY * cos(flapAngle)  [vertical]
-        --
-        -- This preserves the shape perfectly — every point rotates together.
         local cosA = math.cos(flapAngle)
         local sinA = math.sin(flapAngle)
 
-        local rotatedX =  bpX * cosA - bpY * sinA
-        local rotatedY =  bpX * sinA + bpY * cosA
-        local rotatedZ =  bpZ
+        -- Blueprint coords
+        local bpOut  = wp.outX   -- spanwise (horizontal, away from spine)
+        local bpUp   = wp.upY    -- vertical
+        local bpBack = wp.backZ  -- depth behind avatar
 
-        -- Mirror for left wing
-        rotatedX = rotatedX * sideSign
+        -- Rotate around vertical Y hinge at shoulder:
+        -- outX and backZ rotate, upY is unchanged
+        local rotX =  bpOut * cosA - bpBack * sinA
+        local rotZ =  bpOut * sinA + bpBack * cosA
+        -- Always keep wing BEHIND avatar: rotZ should be positive
+        -- Add a guaranteed minimum back offset so it never clips forward
+        rotZ = rotZ + 0.5
 
-        -- Shoulder anchor offset
+        -- Mirror left wing
+        rotX = rotX * sideSign
+
+        -- Shoulder attach on upper back
         local shoulder = (sideSign == 1)
             and WING_SHOULDER_RIGHT
             or  WING_SHOULDER_LEFT
 
+        -- Build final local position relative to HumanoidRootPart
         local localPos = Vector3.new(
-            shoulder.X + rotatedX,
-            shoulder.Y + rotatedY,
-            shoulder.Z + rotatedZ
+            shoulder.X + rotX,
+            shoulder.Y + bpUp,
+            shoulder.Z + rotZ   -- Z+ = behind avatar in local space
         )
 
+        -- Convert from local root space to world space
         return CFrame.new(cf:PointToWorldSpace(localPos))
     end
 
-    -- ── STANDARD FORMATIONS ───────────────────────────────────────────────
+    -- ── SPHERE MODE ────────────────────────────────────────────────────────
+    -- All parts clump together into ONE tight sphere cluster.
+    -- Parts are layered in concentric shells around a moving target.
+    -- The target moves based on sphereMode (orbit/follow/stay).
+    -- Every part spins at 999 rad/s for visual effect.
+
+    local SPHERE_SHELL_SPACING = 0.8  -- studs between parts in cluster
+
+    local function getSphereShellPos(index, total)
+        -- Pack parts into a tight sphere using spherical fibonacci distribution
+        -- This evenly distributes N points on a sphere surface
+        local goldenRatio = (1 + math.sqrt(5)) / 2
+        local i           = index - 1
+        local theta       = math.acos(1 - 2*(i+0.5)/total)
+        local phi         = 2 * math.pi * i / goldenRatio
+        -- Use a small radius so parts clump tightly
+        local r = SPHERE_SHELL_SPACING * (1 + math.floor(i/12) * 0.5)
+        return Vector3.new(
+            r * math.sin(theta) * math.cos(phi),
+            r * math.sin(theta) * math.sin(phi),
+            r * math.cos(theta)
+        )
+    end
+
+    local function updateSphereTarget(dt, rootPos)
+        if sphereMode == "orbit" then
+            -- Orbit around the player in a circle
+            sphereOrbitAngle = sphereOrbitAngle + dt * SPHERE_SPEED
+            local targetPos = rootPos + Vector3.new(
+                math.cos(sphereOrbitAngle) * SPHERE_RADIUS,
+                1.5,
+                math.sin(sphereOrbitAngle) * SPHERE_RADIUS
+            )
+            -- Spring physics for smooth follow
+            local diff = targetPos - spherePos
+            sphereVel  = sphereVel  + diff  * (SPHERE_SPRING * dt)
+            sphereVel  = sphereVel  * (1 - SPHERE_DAMP * dt)
+            spherePos  = spherePos  + sphereVel * dt
+
+        elseif sphereMode == "follow" then
+            -- Follow behind player like a pet on a leash
+            local behindPlayer = rootPos + Vector3.new(0, 1.5, 4)
+            local diff = behindPlayer - spherePos
+            local dist = diff.Magnitude
+            -- Only pull if far enough (leash effect)
+            if dist > 3 then
+                sphereVel = sphereVel + diff.Unit * (dist - 3) * SPHERE_SPRING * dt
+            end
+            sphereVel = sphereVel * (1 - SPHERE_DAMP * dt)
+            spherePos = spherePos + sphereVel * dt
+
+        elseif sphereMode == "stay" then
+            -- Slowly decelerate and stay in place
+            sphereVel = sphereVel * (1 - SPHERE_DAMP * 2 * dt)
+            spherePos = spherePos + sphereVel * dt
+        end
+    end
+
+    -- ── FORMATIONS ────────────────────────────────────────────────────────
     local function getFormationCF(mode, i, n, origin, cf, t)
         if mode == "heart" then
-            local a  = ((i-1) / math.max(n,1)) * math.pi * 2
-            local hx =  16 * math.sin(a)^3
-            local hz = -(13*math.cos(a) - 5*math.cos(2*a)
-                       - 2*math.cos(3*a) - math.cos(4*a))
-            local s  = radius / 16
+            local a  = ((i-1)/math.max(n,1))*math.pi*2
+            local hx =  16*math.sin(a)^3
+            local hz = -(13*math.cos(a)-5*math.cos(2*a)
+                       -2*math.cos(3*a)-math.cos(4*a))
+            local s  = radius/16
             return CFrame.new(
-                origin + cf:VectorToWorldSpace(Vector3.new(hx*s, 0, hz*s)))
+                origin+cf:VectorToWorldSpace(Vector3.new(hx*s,0,hz*s)))
 
         elseif mode == "rings" then
-            local a = ((i-1) / math.max(n,1)) * math.pi * 2 + t * 1.4
-            return CFrame.new(origin + Vector3.new(
-                math.cos(a)*radius, 0, math.sin(a)*radius))
+            local a = ((i-1)/math.max(n,1))*math.pi*2+t*1.4
+            return CFrame.new(origin+Vector3.new(
+                math.cos(a)*radius,0,math.sin(a)*radius))
 
         elseif mode == "wall" then
-            local cols = math.max(1, math.ceil(math.sqrt(n)))
-            local col  = ((i-1) % cols) - math.floor(cols/2)
-            local row  = math.floor((i-1) / cols) - 1
+            local cols = math.max(1,math.ceil(math.sqrt(n)))
+            local col  = ((i-1)%cols)-math.floor(cols/2)
+            local row  = math.floor((i-1)/cols)-1
             return CFrame.new(
                 origin
-                + cf.LookVector  * radius
-                + cf.RightVector * (col * 1.8)
-                + cf.UpVector    * (row * 1.8 + 1))
+                +cf.LookVector *radius
+                +cf.RightVector*(col*1.8)
+                +cf.UpVector   *(row*1.8+1))
 
         elseif mode == "box" then
-            local fV  = {cf.LookVector, -cf.LookVector,
-                         cf.RightVector,-cf.RightVector,
-                         cf.UpVector,   -cf.UpVector}
-            local fTa = {cf.RightVector, cf.RightVector,
-                         cf.LookVector,  cf.LookVector,
-                         cf.RightVector, cf.RightVector}
-            local fTb = {cf.UpVector,    cf.UpVector,
-                         cf.UpVector,    cf.UpVector,
-                         cf.LookVector,  cf.LookVector}
-            local fi  = ((i-1) % 6) + 1
-            local si  = math.floor((i-1) / 6)
-            local col = (si % 2) - 0.5
-            local row = math.floor(si / 2) - 0.5
-            local sp  = radius * 0.45
+            local fV ={cf.LookVector,-cf.LookVector,
+                       cf.RightVector,-cf.RightVector,
+                       cf.UpVector,-cf.UpVector}
+            local fTa={cf.RightVector,cf.RightVector,
+                       cf.LookVector,cf.LookVector,
+                       cf.RightVector,cf.RightVector}
+            local fTb={cf.UpVector,cf.UpVector,
+                       cf.UpVector,cf.UpVector,
+                       cf.LookVector,cf.LookVector}
+            local fi  = ((i-1)%6)+1
+            local si  = math.floor((i-1)/6)
+            local col = (si%2)-0.5
+            local row = math.floor(si/2)-0.5
+            local sp  = radius*0.45
             return CFrame.new(
-                origin
-                + fV[fi]  * radius
-                + fTa[fi] * (col * sp)
-                + fTb[fi] * (row * sp))
+                origin+fV[fi]*radius+fTa[fi]*(col*sp)+fTb[fi]*(row*sp))
 
         elseif mode == "wings" then
-            -- Split parts between right and left wing
-            local half = math.ceil(n / 2)
-            local sideSign, ptIdx
+            local half = math.ceil(n/2)
+            local sideSign,ptIdx
             if i <= half then
                 sideSign = 1
                 ptIdx    = i
@@ -467,9 +541,15 @@ local function main()
                 sideSign = -1
                 ptIdx    = i - half
             end
-            -- Wrap point index within available wing points
-            local wpIdx = ((ptIdx - 1) % WING_POINT_COUNT) + 1
+            local wpIdx = ((ptIdx-1)%WING_POINT_COUNT)+1
             return getWingCF(wpIdx, sideSign, cf, t)
+
+        elseif mode == "sphere" then
+            -- All parts clump at spherePos, packed in tight cluster
+            local offset = getSphereShellPos(i, n)
+            return CFrame.new(spherePos + offset)
+                * CFrame.Angles(
+                    t * 999, t * 999, t * 999)  -- spin 999 rad/s
         end
 
         return CFrame.new(origin)
@@ -478,55 +558,46 @@ local function main()
     -- ── GASTER HAND CFrame ────────────────────────────────────────────────
     local function getGasterCF(slotIndex, sideSign, cf, gt)
         local slot = ALL_HAND_SLOTS[slotIndex]
-        if not slot then return CFrame.new(0, -5000, 0) end
-
+        if not slot then return CFrame.new(0,-5000,0) end
         local sx = slot.x * HAND_SCALE
         local sy = slot.y * HAND_SCALE
-
-        local floatY = math.sin(gt * 2.0 + sideSign * 1.2) * 1.0
-
+        local floatY = math.sin(gt*2.0+sideSign*1.2)*1.0
         if not slot.isPalm then
             if gasterAnim == "pointing" then
-                sy = sy + (POINTING_BIAS[slotIndex] or 0) * HAND_SCALE
+                sy = sy+(POINTING_BIAS[slotIndex] or 0)*HAND_SCALE
             elseif gasterAnim == "punching" then
-                sy = sy + (PUNCH_BIAS[slotIndex] or 0) * HAND_SCALE
+                sy = sy+(PUNCH_BIAS[slotIndex] or 0)*HAND_SCALE
             end
         end
-
         local waveAngle = 0
         if gasterAnim == "waving" then
-            waveAngle = math.sin(gt * 2.2) * 0.5
+            waveAngle = math.sin(gt*2.2)*0.5
         end
-
         local punchZ = 0
         if gasterAnim == "punching" and not slot.isPalm then
-            punchZ = (math.sin(gt * 10) * 0.5 + 0.5) * 8
+            punchZ = (math.sin(gt*10)*0.5+0.5)*8
         end
-
-        local rotX = sx * math.cos(waveAngle)
-        local rotZ = sx * math.sin(waveAngle)
-
-        local base       = (sideSign == 1) and HAND_RIGHT or HAND_LEFT
+        local rotX = sx*math.cos(waveAngle)
+        local rotZ = sx*math.sin(waveAngle)
+        local base       = (sideSign==1) and HAND_RIGHT or HAND_LEFT
         local palmOffset = slot.isPalm and 1.5 or 0
-
         local localOffset = Vector3.new(
-            base.X + rotX * sideSign,
-            base.Y + sy + floatY,
-            base.Z + rotZ - punchZ + palmOffset
+            base.X+rotX*sideSign,
+            base.Y+sy+floatY,
+            base.Z+rotZ-punchZ+palmOffset
         )
         return CFrame.new(cf:PointToWorldSpace(localOffset))
     end
 
-    -- ── BLACK HOLE PET TARGET ─────────────────────────────────────────────
     local function getBHTarget(i, cf)
-        local pet = cf:PointToWorldSpace(Vector3.new(3, 1, -5))
-        return pet + Vector3.new(
-            math.sin(i * 73.1) * 0.2,
-            math.cos(i * 53.7) * 0.2,
-            math.sin(i * 31.9) * 0.2)
+        local pet = cf:PointToWorldSpace(Vector3.new(3,1,-5))
+        return pet+Vector3.new(
+            math.sin(i*73.1)*0.2,
+            math.cos(i*53.7)*0.2,
+            math.sin(i*31.9)*0.2)
     end
 
-    -- ── GASTER SUB-GUI ────────────────────────────────────────────────────
+    -- ── GASTER GUI ────────────────────────────────────────────────────────
     local function destroyGasterGui()
         if gasterSubGui and gasterSubGui.Parent then
             gasterSubGui:Destroy()
@@ -545,109 +616,214 @@ local function main()
         sg.Parent         = pg
         gasterSubGui      = sg
 
-        local W, H = 220, 196
+        local W,H = 200,185
         local panel = Instance.new("Frame")
-        panel.Size             = UDim2.fromOffset(W, H)
-        panel.Position         = UDim2.new(0.5, 30, 0.5, -(H/2) - 130)
-        panel.BackgroundColor3 = Color3.fromRGB(6, 6, 18)
+        panel.Size             = UDim2.fromOffset(W,H)
+        panel.Position         = UDim2.new(0.5,30,0.5,-(H/2)-110)
+        panel.BackgroundColor3 = Color3.fromRGB(6,6,18)
         panel.BorderSizePixel  = 0
         panel.Parent           = sg
-        Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 8)
-
-        local ps     = Instance.new("UIStroke", panel)
-        ps.Color     = Color3.fromRGB(180, 60, 255)
-        ps.Thickness = 1.5
+        Instance.new("UICorner",panel).CornerRadius = UDim.new(0,7)
+        local ps     = Instance.new("UIStroke",panel)
+        ps.Color     = Color3.fromRGB(180,60,255)
+        ps.Thickness = 1.2
 
         local tBar = Instance.new("Frame")
-        tBar.Size             = UDim2.new(1, 0, 0, 36)
-        tBar.BackgroundColor3 = Color3.fromRGB(20, 8, 45)
+        tBar.Size             = UDim2.new(1,0,0,30)
+        tBar.BackgroundColor3 = Color3.fromRGB(20,8,45)
         tBar.BorderSizePixel  = 0
         tBar.ZIndex           = 10
         tBar.Parent           = panel
-        Instance.new("UICorner", tBar).CornerRadius = UDim.new(0, 8)
+        Instance.new("UICorner",tBar).CornerRadius = UDim.new(0,7)
 
         local tLbl = Instance.new("TextLabel")
-        tLbl.Text                   = "GASTER HAND FORM"
-        tLbl.Size                   = UDim2.new(1, -10, 1, 0)
-        tLbl.Position               = UDim2.fromOffset(8, 0)
+        tLbl.Text                   = "GASTER FORM"
+        tLbl.Size                   = UDim2.new(1,-8,1,0)
+        tLbl.Position               = UDim2.fromOffset(6,0)
         tLbl.BackgroundTransparency = 1
-        tLbl.TextColor3             = Color3.fromRGB(200, 120, 255)
-        tLbl.TextSize               = 12
+        tLbl.TextColor3             = Color3.fromRGB(200,120,255)
+        tLbl.TextSize               = 11
         tLbl.Font                   = Enum.Font.GothamBold
         tLbl.TextXAlignment         = Enum.TextXAlignment.Left
         tLbl.ZIndex                 = 10
         tLbl.Parent                 = tBar
 
         local animLbl = Instance.new("TextLabel")
-        animLbl.Text                   = "FORM: " .. gasterAnim:upper()
-        animLbl.Size                   = UDim2.new(1, -16, 0, 18)
-        animLbl.Position               = UDim2.fromOffset(8, 42)
+        animLbl.Text                   = "FORM: "..gasterAnim:upper()
+        animLbl.Size                   = UDim2.new(1,-10,0,16)
+        animLbl.Position               = UDim2.fromOffset(6,34)
         animLbl.BackgroundTransparency = 1
-        animLbl.TextColor3             = Color3.fromRGB(130, 130, 255)
-        animLbl.TextSize               = 11
+        animLbl.TextColor3             = Color3.fromRGB(130,130,255)
+        animLbl.TextSize               = 10
         animLbl.Font                   = Enum.Font.GothamBold
         animLbl.TextXAlignment         = Enum.TextXAlignment.Left
         animLbl.Parent                 = panel
 
         local animList = {
-            {txt="POINTING", key="pointing", col=Color3.fromRGB(100,200,255)},
-            {txt="WAVING",   key="waving",   col=Color3.fromRGB(100,255,160)},
-            {txt="PUNCHING", key="punching", col=Color3.fromRGB(255,120,120)},
+            {txt="POINTING",key="pointing",col=Color3.fromRGB(100,200,255)},
+            {txt="WAVING",  key="waving",  col=Color3.fromRGB(100,255,160)},
+            {txt="PUNCHING",key="punching",col=Color3.fromRGB(255,120,120)},
         }
-        for idx, anim in ipairs(animList) do
+        for idx,anim in ipairs(animList) do
             local btn = Instance.new("TextButton")
             btn.Text             = anim.txt
-            btn.Size             = UDim2.new(1, -16, 0, 32)
-            btn.Position         = UDim2.fromOffset(8, 62 + (idx-1)*38)
-            btn.BackgroundColor3 = Color3.fromRGB(22, 10, 48)
+            btn.Size             = UDim2.new(1,-12,0,30)
+            btn.Position         = UDim2.fromOffset(6,54+(idx-1)*36)
+            btn.BackgroundColor3 = Color3.fromRGB(22,10,48)
             btn.TextColor3       = anim.col
-            btn.TextSize         = 12
+            btn.TextSize         = 11
             btn.Font             = Enum.Font.GothamBold
             btn.BorderSizePixel  = 0
             btn.Parent           = panel
-            Instance.new("UICorner", btn)
+            Instance.new("UICorner",btn)
             btn.MouseButton1Click:Connect(function()
                 gasterAnim   = anim.key
                 gasterT      = 0
-                animLbl.Text = "FORM: " .. anim.key:upper()
+                animLbl.Text = "FORM: "..anim.key:upper()
             end)
         end
 
-        local dragging     = false
-        local dragStartM   = Vector2.zero
-        local dragStartPos = UDim2.new()
+        -- drag
+        local dragging,dragStartM,dragStartPos = false,Vector2.zero,UDim2.new()
         tBar.InputBegan:Connect(function(inp)
-            if inp.UserInputType == Enum.UserInputType.MouseButton1
-                or inp.UserInputType == Enum.UserInputType.Touch then
-                dragging     = true
-                dragStartM   = Vector2.new(inp.Position.X, inp.Position.Y)
-                dragStartPos = panel.Position
-            end
-        end)
-        panel.InputBegan:Connect(function(inp)
-            if inp.UserInputType == Enum.UserInputType.MouseButton1
-                or inp.UserInputType == Enum.UserInputType.Touch then
-                if not dragging then
-                    dragging     = true
-                    dragStartM   = Vector2.new(inp.Position.X, inp.Position.Y)
-                    dragStartPos = panel.Position
-                end
+            if inp.UserInputType==Enum.UserInputType.MouseButton1
+                or inp.UserInputType==Enum.UserInputType.Touch then
+                dragging=true
+                dragStartM=Vector2.new(inp.Position.X,inp.Position.Y)
+                dragStartPos=panel.Position
             end
         end)
         UserInputService.InputChanged:Connect(function(inp)
             if not dragging then return end
-            if inp.UserInputType == Enum.UserInputType.MouseMovement
-                or inp.UserInputType == Enum.UserInputType.Touch then
-                local d = Vector2.new(inp.Position.X, inp.Position.Y) - dragStartM
-                panel.Position = UDim2.new(
-                    dragStartPos.X.Scale, dragStartPos.X.Offset + d.X,
-                    dragStartPos.Y.Scale, dragStartPos.Y.Offset + d.Y)
+            if inp.UserInputType==Enum.UserInputType.MouseMovement
+                or inp.UserInputType==Enum.UserInputType.Touch then
+                local d=Vector2.new(inp.Position.X,inp.Position.Y)-dragStartM
+                panel.Position=UDim2.new(
+                    dragStartPos.X.Scale,dragStartPos.X.Offset+d.X,
+                    dragStartPos.Y.Scale,dragStartPos.Y.Offset+d.Y)
             end
         end)
         UserInputService.InputEnded:Connect(function(inp)
-            if inp.UserInputType == Enum.UserInputType.MouseButton1
-                or inp.UserInputType == Enum.UserInputType.Touch then
-                dragging = false
+            if inp.UserInputType==Enum.UserInputType.MouseButton1
+                or inp.UserInputType==Enum.UserInputType.Touch then
+                dragging=false
+            end
+        end)
+    end
+
+    -- ── SPHERE GUI ────────────────────────────────────────────────────────
+    local function destroySphereGui()
+        if sphereSubGui and sphereSubGui.Parent then
+            sphereSubGui:Destroy()
+        end
+        sphereSubGui = nil
+    end
+
+    local function createSphereGui()
+        destroySphereGui()
+        local pg = player:WaitForChild("PlayerGui")
+        local sg = Instance.new("ScreenGui")
+        sg.Name           = "SphereSubGUI"
+        sg.ResetOnSpawn   = false
+        sg.DisplayOrder   = 1000
+        sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+        sg.Parent         = pg
+        sphereSubGui      = sg
+
+        local W,H = 200,175
+        local panel = Instance.new("Frame")
+        panel.Size             = UDim2.fromOffset(W,H)
+        panel.Position         = UDim2.new(0.5,30,0.5,-(H/2)-110)
+        panel.BackgroundColor3 = Color3.fromRGB(4,12,20)
+        panel.BorderSizePixel  = 0
+        panel.Parent           = sg
+        Instance.new("UICorner",panel).CornerRadius = UDim.new(0,7)
+        local ps     = Instance.new("UIStroke",panel)
+        ps.Color     = Color3.fromRGB(60,180,255)
+        ps.Thickness = 1.2
+
+        local tBar = Instance.new("Frame")
+        tBar.Size             = UDim2.new(1,0,0,30)
+        tBar.BackgroundColor3 = Color3.fromRGB(8,20,45)
+        tBar.BorderSizePixel  = 0
+        tBar.ZIndex           = 10
+        tBar.Parent           = panel
+        Instance.new("UICorner",tBar).CornerRadius = UDim.new(0,7)
+
+        local tLbl = Instance.new("TextLabel")
+        tLbl.Text                   = "SPHERE CONTROL"
+        tLbl.Size                   = UDim2.new(1,-8,1,0)
+        tLbl.Position               = UDim2.fromOffset(6,0)
+        tLbl.BackgroundTransparency = 1
+        tLbl.TextColor3             = Color3.fromRGB(80,200,255)
+        tLbl.TextSize               = 11
+        tLbl.Font                   = Enum.Font.GothamBold
+        tLbl.TextXAlignment         = Enum.TextXAlignment.Left
+        tLbl.ZIndex                 = 10
+        tLbl.Parent                 = tBar
+
+        local modeLbl = Instance.new("TextLabel")
+        modeLbl.Text                   = "STATE: "..sphereMode:upper()
+        modeLbl.Size                   = UDim2.new(1,-10,0,16)
+        modeLbl.Position               = UDim2.fromOffset(6,34)
+        modeLbl.BackgroundTransparency = 1
+        modeLbl.TextColor3             = Color3.fromRGB(80,180,255)
+        modeLbl.TextSize               = 10
+        modeLbl.Font                   = Enum.Font.GothamBold
+        modeLbl.TextXAlignment         = Enum.TextXAlignment.Left
+        modeLbl.Parent                 = panel
+
+        local sphereBtns = {
+            {txt="ORBIT",  key="orbit",  col=Color3.fromRGB(80, 220,255)},
+            {txt="FOLLOW", key="follow", col=Color3.fromRGB(120,255,160)},
+            {txt="STAY",   key="stay",   col=Color3.fromRGB(255,200, 80)},
+        }
+        for idx,sb in ipairs(sphereBtns) do
+            local btn = Instance.new("TextButton")
+            btn.Text             = sb.txt
+            btn.Size             = UDim2.new(1,-12,0,30)
+            btn.Position         = UDim2.fromOffset(6,54+(idx-1)*36)
+            btn.BackgroundColor3 = Color3.fromRGB(8,22,44)
+            btn.TextColor3       = sb.col
+            btn.TextSize         = 11
+            btn.Font             = Enum.Font.GothamBold
+            btn.BorderSizePixel  = 0
+            btn.Parent           = panel
+            Instance.new("UICorner",btn)
+            local bs     = Instance.new("UIStroke",btn)
+            bs.Color     = Color3.fromRGB(40,140,220)
+            bs.Thickness = 1
+            btn.MouseButton1Click:Connect(function()
+                sphereMode   = sb.key
+                sphereVel    = Vector3.zero
+                modeLbl.Text = "STATE: "..sb.key:upper()
+            end)
+        end
+
+        -- drag
+        local dragging,dragStartM,dragStartPos = false,Vector2.zero,UDim2.new()
+        tBar.InputBegan:Connect(function(inp)
+            if inp.UserInputType==Enum.UserInputType.MouseButton1
+                or inp.UserInputType==Enum.UserInputType.Touch then
+                dragging=true
+                dragStartM=Vector2.new(inp.Position.X,inp.Position.Y)
+                dragStartPos=panel.Position
+            end
+        end)
+        UserInputService.InputChanged:Connect(function(inp)
+            if not dragging then return end
+            if inp.UserInputType==Enum.UserInputType.MouseMovement
+                or inp.UserInputType==Enum.UserInputType.Touch then
+                local d=Vector2.new(inp.Position.X,inp.Position.Y)-dragStartM
+                panel.Position=UDim2.new(
+                    dragStartPos.X.Scale,dragStartPos.X.Offset+d.X,
+                    dragStartPos.Y.Scale,dragStartPos.Y.Offset+d.Y)
+            end
+        end)
+        UserInputService.InputEnded:Connect(function(inp)
+            if inp.UserInputType==Enum.UserInputType.MouseButton1
+                or inp.UserInputType==Enum.UserInputType.Touch then
+                dragging=false
             end
         end)
     end
@@ -671,30 +847,35 @@ local function main()
             local cf  = root.CFrame
             local t   = tick()
 
-            table.insert(snakeHistory, 1, pos)
+            -- Update sphere physics target
+            if activeMode == "sphere" then
+                updateSphereTarget(dt, pos)
+            end
+
+            table.insert(snakeHistory,1,pos)
             if #snakeHistory > SNAKE_HIST_MAX then
-                table.remove(snakeHistory, SNAKE_HIST_MAX + 1)
+                table.remove(snakeHistory,SNAKE_HIST_MAX+1)
             end
 
             if activeMode ~= lastMode then
                 if lastMode == "blackhole" then
-                    for _, d in pairs(controlled) do disableFling(d) end
+                    for _,d in pairs(controlled) do disableFling(d) end
                 end
                 if activeMode == "blackhole" then
-                    for p, d in pairs(controlled) do enableFling(p, d) end
+                    for p,d in pairs(controlled) do enableFling(p,d) end
                 end
                 if CFRAME_MODES[activeMode] then
-                    for _, d in pairs(controlled) do
+                    for _,d in pairs(controlled) do
                         if d.bp and d.bp.Parent then
                             d.bp.MaxForce = Vector3.zero
                         end
                     end
                 end
                 if not CFRAME_MODES[activeMode] and CFRAME_MODES[lastMode] then
-                    for _, d in pairs(controlled) do
+                    for _,d in pairs(controlled) do
                         if d.bp and d.bp.Parent then
                             d.bp.MaxForce =
-                                Vector3.new(math.huge, math.huge, math.huge)
+                                Vector3.new(math.huge,math.huge,math.huge)
                         end
                     end
                 end
@@ -703,67 +884,91 @@ local function main()
                 else
                     destroyGasterGui()
                 end
+                if SPHERE_MODES[activeMode] then
+                    -- Initialise sphere position at player location
+                    spherePos = pos + Vector3.new(0,1.5,4)
+                    sphereVel = Vector3.zero
+                    createSphereGui()
+                else
+                    destroySphereGui()
+                end
                 lastMode = activeMode
             end
 
-            if not isActivated or activeMode == "none" or partCount == 0 then
+            if not isActivated or activeMode=="none" or partCount==0 then
                 continue
             end
 
             local arr = {}
-            for part, data in pairs(controlled) do
+            for part,data in pairs(controlled) do
                 if part.Parent and data.bp and data.bp.Parent then
-                    table.insert(arr, {p=part, d=data})
+                    table.insert(arr,{p=part,d=data})
                 else
                     if data.touchConn then data.touchConn:Disconnect() end
                     clearNoCollision(data)
                     controlled[part] = nil
-                    partCount = math.max(0, partCount - 1)
+                    partCount = math.max(0,partCount-1)
                 end
             end
 
             local n = #arr
 
-            for i, item in ipairs(arr) do
+            for i,item in ipairs(arr) do
                 local part = item.p
                 local data = item.d
 
                 if activeMode == "snake" then
                     local tgt = getSnakeTarget(i)
-                    data.bp.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+                    data.bp.MaxForce = Vector3.new(math.huge,math.huge,math.huge)
                     data.bp.Position = tgt
                     data.bp.P        = pullStrength
-                    data.bp.D        = pullStrength * 0.12
+                    data.bp.D        = pullStrength*0.12
 
                 elseif activeMode == "blackhole" then
-                    local tgt = getBHTarget(i, cf)
-                    data.bp.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+                    local tgt = getBHTarget(i,cf)
+                    data.bp.MaxForce = Vector3.new(math.huge,math.huge,math.huge)
                     data.bp.Position = tgt
                     data.bp.P        = pullStrength
-                    data.bp.D        = pullStrength * 0.12
+                    data.bp.D        = pullStrength*0.12
 
                 elseif activeMode == "gasterhand" then
                     data.bp.MaxForce = Vector3.zero
                     if i <= HAND_SLOTS_COUNT then
-                        part.CFrame = getGasterCF(i, 1, cf, gasterT)
+                        part.CFrame = getGasterCF(i,1,cf,gasterT)
                     else
-                        part.CFrame = CFrame.new(0, -5000, 0)
+                        part.CFrame = CFrame.new(0,-5000,0)
                     end
 
                 elseif activeMode == "gaster2hands" then
                     data.bp.MaxForce = Vector3.zero
                     if i <= HAND_SLOTS_COUNT then
-                        part.CFrame = getGasterCF(i, 1, cf, gasterT)
-                    elseif i <= HAND_SLOTS_COUNT * 2 then
+                        part.CFrame = getGasterCF(i,1,cf,gasterT)
+                    elseif i <= HAND_SLOTS_COUNT*2 then
                         part.CFrame = getGasterCF(
-                            i - HAND_SLOTS_COUNT, -1, cf, gasterT)
+                            i-HAND_SLOTS_COUNT,-1,cf,gasterT)
                     else
-                        part.CFrame = CFrame.new(0, -5000, 0)
+                        part.CFrame = CFrame.new(0,-5000,0)
                     end
+
+                elseif activeMode == "sphere" then
+                    -- All parts pack tightly into sphere cluster with spin
+                    data.bp.MaxForce = Vector3.zero
+                    local offset = getSphereShellPos(i,n)
+                    -- Spin angle: 999 * time so it rotates insanely fast
+                    local spinT = t * 999
+                    part.CFrame = CFrame.new(spherePos + offset)
+                        * CFrame.Angles(spinT, spinT*1.3, spinT*0.7)
 
                 elseif CFRAME_MODES[activeMode] then
                     data.bp.MaxForce = Vector3.zero
-                    part.CFrame = getFormationCF(activeMode, i, n, pos, cf, t)
+                    part.CFrame = getFormationCF(activeMode,i,n,pos,cf,t)
+                end
+
+                -- Spin ALL parts in wings mode too
+                if activeMode == "wings" then
+                    local spinT = t * 999
+                    part.CFrame = part.CFrame
+                        * CFrame.Angles(spinT,spinT,spinT)
                 end
             end
         end
@@ -775,7 +980,7 @@ local function main()
             if isActivated and activeMode ~= "none" then
                 sweepMap()
                 if CFRAME_MODES[activeMode] then
-                    for _, d in pairs(controlled) do
+                    for _,d in pairs(controlled) do
                         if d.bp and d.bp.Parent then
                             d.bp.MaxForce = Vector3.zero
                         end
@@ -799,36 +1004,37 @@ local function main()
         gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
         gui.Parent         = pg
 
-        local W, H = 320, 570
+        -- Smaller GUI: 260 wide instead of 320
+        local W,H = 260,480
         local panel = Instance.new("Frame")
         panel.Name             = "Panel"
-        panel.Size             = UDim2.fromOffset(W, H)
-        panel.Position         = UDim2.new(0.5, -W/2, 0.5, -H/2)
-        panel.BackgroundColor3 = Color3.fromRGB(10, 10, 25)
+        panel.Size             = UDim2.fromOffset(W,H)
+        panel.Position         = UDim2.new(0.5,-W/2,0.5,-H/2)
+        panel.BackgroundColor3 = Color3.fromRGB(10,10,25)
         panel.BorderSizePixel  = 0
         panel.ClipsDescendants = true
         panel.Parent           = gui
-        Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 8)
+        Instance.new("UICorner",panel).CornerRadius = UDim.new(0,8)
 
-        local pStroke     = Instance.new("UIStroke", panel)
-        pStroke.Color     = Color3.fromRGB(90, 40, 180)
+        local pStroke     = Instance.new("UIStroke",panel)
+        pStroke.Color     = Color3.fromRGB(90,40,180)
         pStroke.Thickness = 1.5
 
         local titleBar = Instance.new("Frame")
-        titleBar.Size             = UDim2.new(1, 0, 0, 40)
-        titleBar.BackgroundColor3 = Color3.fromRGB(20, 10, 48)
+        titleBar.Size             = UDim2.new(1,0,0,34)
+        titleBar.BackgroundColor3 = Color3.fromRGB(20,10,48)
         titleBar.BorderSizePixel  = 0
         titleBar.ZIndex           = 10
         titleBar.Parent           = panel
-        Instance.new("UICorner", titleBar).CornerRadius = UDim.new(0, 8)
+        Instance.new("UICorner",titleBar).CornerRadius = UDim.new(0,8)
 
         local titleTxt = Instance.new("TextLabel")
         titleTxt.Text                   = "MANIPULATOR KII"
-        titleTxt.Size                   = UDim2.new(1, -80, 1, 0)
-        titleTxt.Position               = UDim2.fromOffset(10, 0)
+        titleTxt.Size                   = UDim2.new(1,-70,1,0)
+        titleTxt.Position               = UDim2.fromOffset(8,0)
         titleTxt.BackgroundTransparency = 1
-        titleTxt.TextColor3             = Color3.fromRGB(195, 140, 255)
-        titleTxt.TextSize               = 14
+        titleTxt.TextColor3             = Color3.fromRGB(195,140,255)
+        titleTxt.TextSize               = 12
         titleTxt.Font                   = Enum.Font.GothamBold
         titleTxt.TextXAlignment         = Enum.TextXAlignment.Left
         titleTxt.ZIndex                 = 10
@@ -836,83 +1042,84 @@ local function main()
 
         local closeBtn = Instance.new("TextButton")
         closeBtn.Text             = "X"
-        closeBtn.Size             = UDim2.fromOffset(30, 28)
-        closeBtn.Position         = UDim2.new(1, -36, 0, 6)
-        closeBtn.BackgroundColor3 = Color3.fromRGB(150, 25, 25)
-        closeBtn.TextColor3       = Color3.fromRGB(255, 255, 255)
-        closeBtn.TextSize         = 13
+        closeBtn.Size             = UDim2.fromOffset(26,24)
+        closeBtn.Position         = UDim2.new(1,-30,0,5)
+        closeBtn.BackgroundColor3 = Color3.fromRGB(150,25,25)
+        closeBtn.TextColor3       = Color3.fromRGB(255,255,255)
+        closeBtn.TextSize         = 11
         closeBtn.Font             = Enum.Font.GothamBold
         closeBtn.BorderSizePixel  = 0
         closeBtn.ZIndex           = 11
         closeBtn.Parent           = titleBar
-        Instance.new("UICorner", closeBtn)
+        Instance.new("UICorner",closeBtn)
 
         local scroll = Instance.new("ScrollingFrame")
-        scroll.Size                   = UDim2.new(1, 0, 1, -40)
-        scroll.Position               = UDim2.fromOffset(0, 40)
+        scroll.Size                   = UDim2.new(1,0,1,-34)
+        scroll.Position               = UDim2.fromOffset(0,34)
         scroll.BackgroundTransparency = 1
         scroll.BorderSizePixel        = 0
         scroll.ScrollBarThickness     = 3
-        scroll.ScrollBarImageColor3   = Color3.fromRGB(90, 40, 180)
-        scroll.CanvasSize             = UDim2.fromOffset(0, 0)
+        scroll.ScrollBarImageColor3   = Color3.fromRGB(90,40,180)
+        scroll.CanvasSize             = UDim2.fromOffset(0,0)
         scroll.AutomaticCanvasSize    = Enum.AutomaticSize.Y
         scroll.Parent                 = panel
 
-        local layout = Instance.new("UIListLayout", scroll)
-        layout.Padding             = UDim.new(0, 5)
+        local layout = Instance.new("UIListLayout",scroll)
+        layout.Padding             = UDim.new(0,4)
         layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
         layout.SortOrder           = Enum.SortOrder.LayoutOrder
 
-        local pad = Instance.new("UIPadding", scroll)
-        pad.PaddingTop    = UDim.new(0, 6)
-        pad.PaddingBottom = UDim.new(0, 10)
-        pad.PaddingLeft   = UDim.new(0, 8)
-        pad.PaddingRight  = UDim.new(0, 8)
+        local pad = Instance.new("UIPadding",scroll)
+        pad.PaddingTop    = UDim.new(0,5)
+        pad.PaddingBottom = UDim.new(0,8)
+        pad.PaddingLeft   = UDim.new(0,6)
+        pad.PaddingRight  = UDim.new(0,6)
 
-        local function sLabel(txt, order)
+        -- ── HELPERS ───────────────────────────────────────────────────────
+        local function sLabel(txt,order)
             local l = Instance.new("TextLabel")
             l.Text                   = txt
-            l.Size                   = UDim2.new(1, 0, 0, 20)
+            l.Size                   = UDim2.new(1,0,0,18)
             l.BackgroundTransparency = 1
-            l.TextColor3             = Color3.fromRGB(180, 130, 255)
-            l.TextSize               = 12
+            l.TextColor3             = Color3.fromRGB(180,130,255)
+            l.TextSize               = 10
             l.Font                   = Enum.Font.GothamBold
             l.TextXAlignment         = Enum.TextXAlignment.Left
             l.LayoutOrder            = order
             l.Parent                 = scroll
         end
 
-        local function makeSingleBtn(txt, bgCol, txtCol, order)
+        local function makeSingleBtn(txt,bgCol,txtCol,order)
             local b = Instance.new("TextButton")
             b.Text             = txt
-            b.Size             = UDim2.new(1, 0, 0, 36)
+            b.Size             = UDim2.new(1,0,0,30)
             b.BackgroundColor3 = bgCol
             b.TextColor3       = txtCol
-            b.TextSize         = 12
+            b.TextSize         = 10
             b.Font             = Enum.Font.GothamBold
             b.BorderSizePixel  = 0
             b.LayoutOrder      = order
             b.Parent           = scroll
-            Instance.new("UICorner", b)
+            Instance.new("UICorner",b)
             return b
         end
 
-        local function makeSettingRow(labelTxt, default, hint, order)
+        local function makeSettingRow(labelTxt,default,hint,order)
             local row = Instance.new("Frame")
-            row.Size             = UDim2.new(1, 0, 0, 44)
-            row.BackgroundColor3 = Color3.fromRGB(16, 16, 38)
+            row.Size             = UDim2.new(1,0,0,40)
+            row.BackgroundColor3 = Color3.fromRGB(16,16,38)
             row.BorderSizePixel  = 0
             row.LayoutOrder      = order
             row.Parent           = scroll
-            Instance.new("UICorner", row)
+            Instance.new("UICorner",row)
 
             local lbl = Instance.new("TextLabel")
             lbl.Text                   = labelTxt
-            lbl.Size                   = UDim2.new(0.55, 0, 0, 22)
-            lbl.Position               = UDim2.fromOffset(8, 4)
+            lbl.Size                   = UDim2.new(0.55,0,0,20)
+            lbl.Position               = UDim2.fromOffset(6,3)
             lbl.BackgroundTransparency = 1
-            lbl.TextColor3             = Color3.fromRGB(155, 155, 255)
-            lbl.TextSize               = 11
+            lbl.TextColor3             = Color3.fromRGB(155,155,255)
+            lbl.TextSize               = 10
             lbl.Font                   = Enum.Font.GothamBold
             lbl.TextXAlignment         = Enum.TextXAlignment.Left
             lbl.TextWrapped            = true
@@ -920,24 +1127,24 @@ local function main()
 
             local tb = Instance.new("TextBox")
             tb.Text             = tostring(default)
-            tb.Size             = UDim2.new(0.38, 0, 0, 22)
-            tb.Position         = UDim2.new(0.59, 0, 0, 4)
-            tb.BackgroundColor3 = Color3.fromRGB(28, 28, 55)
-            tb.TextColor3       = Color3.fromRGB(255, 255, 255)
-            tb.TextSize         = 12
+            tb.Size             = UDim2.new(0.38,0,0,20)
+            tb.Position         = UDim2.new(0.59,0,0,3)
+            tb.BackgroundColor3 = Color3.fromRGB(28,28,55)
+            tb.TextColor3       = Color3.fromRGB(255,255,255)
+            tb.TextSize         = 10
             tb.Font             = Enum.Font.Gotham
             tb.ClearTextOnFocus = false
             tb.BorderSizePixel  = 0
             tb.Parent           = row
-            Instance.new("UICorner", tb)
+            Instance.new("UICorner",tb)
 
             local hintLbl = Instance.new("TextLabel")
             hintLbl.Text                   = hint
-            hintLbl.Size                   = UDim2.new(1, -8, 0, 14)
-            hintLbl.Position               = UDim2.fromOffset(8, 27)
+            hintLbl.Size                   = UDim2.new(1,-6,0,12)
+            hintLbl.Position               = UDim2.fromOffset(6,25)
             hintLbl.BackgroundTransparency = 1
-            hintLbl.TextColor3             = Color3.fromRGB(80, 80, 130)
-            hintLbl.TextSize               = 9
+            hintLbl.TextColor3             = Color3.fromRGB(80,80,130)
+            hintLbl.TextSize               = 8
             hintLbl.Font                   = Enum.Font.Gotham
             hintLbl.TextXAlignment         = Enum.TextXAlignment.Left
             hintLbl.Parent                 = row
@@ -945,14 +1152,15 @@ local function main()
             return tb
         end
 
-        sLabel("STATUS", 1)
+        -- ── STATUS ────────────────────────────────────────────────────────
+        sLabel("STATUS",1)
 
         local statusLbl = Instance.new("TextLabel")
         statusLbl.Text                   = "IDLE  |  PARTS: 0"
-        statusLbl.Size                   = UDim2.new(1, 0, 0, 22)
+        statusLbl.Size                   = UDim2.new(1,0,0,18)
         statusLbl.BackgroundTransparency = 1
-        statusLbl.TextColor3             = Color3.fromRGB(80, 255, 140)
-        statusLbl.TextSize               = 12
+        statusLbl.TextColor3             = Color3.fromRGB(80,255,140)
+        statusLbl.TextSize               = 10
         statusLbl.Font                   = Enum.Font.GothamBold
         statusLbl.TextXAlignment         = Enum.TextXAlignment.Left
         statusLbl.LayoutOrder            = 2
@@ -960,10 +1168,10 @@ local function main()
 
         local modeLbl = Instance.new("TextLabel")
         modeLbl.Text                   = "MODE: NONE"
-        modeLbl.Size                   = UDim2.new(1, 0, 0, 18)
+        modeLbl.Size                   = UDim2.new(1,0,0,16)
         modeLbl.BackgroundTransparency = 1
-        modeLbl.TextColor3             = Color3.fromRGB(130, 130, 255)
-        modeLbl.TextSize               = 11
+        modeLbl.TextColor3             = Color3.fromRGB(130,130,255)
+        modeLbl.TextSize               = 10
         modeLbl.Font                   = Enum.Font.GothamBold
         modeLbl.TextXAlignment         = Enum.TextXAlignment.Left
         modeLbl.LayoutOrder            = 3
@@ -972,26 +1180,27 @@ local function main()
         task.spawn(function()
             while panel.Parent and scriptAlive do
                 statusLbl.Text = isActivated
-                    and ("ACTIVE  |  PARTS: " .. partCount)
+                    and ("ACTIVE  |  PARTS: "..partCount)
                     or  "IDLE  |  PARTS: 0"
                 task.wait(0.5)
             end
         end)
 
-        sLabel("STANDARD MODES", 4)
+        -- ── STANDARD MODES ────────────────────────────────────────────────
+        sLabel("STANDARD MODES",4)
 
-        local stdRows  = 4
-        local stdGridH = stdRows * 36 + (stdRows - 1) * 4
+        -- 7 buttons in a 2-col grid
+        local stdRows  = math.ceil(7/2)
+        local stdGridH = stdRows*32+(stdRows-1)*3
         local stdFrame = Instance.new("Frame")
-        stdFrame.Size                   = UDim2.new(1, 0, 0, stdGridH)
+        stdFrame.Size                   = UDim2.new(1,0,0,stdGridH)
         stdFrame.BackgroundTransparency = 1
         stdFrame.LayoutOrder            = 5
         stdFrame.Parent                 = scroll
 
-        local stdGL = Instance.new("UIGridLayout", stdFrame)
-        stdGL.CellSize            = UDim2.new(
-        0.5, -3, 0, 36)
-        stdGL.CellPadding         = UDim2.fromOffset(4, 4)
+        local stdGL = Instance.new("UIGridLayout",stdFrame)
+        stdGL.CellSize            = UDim2.new(0.5,-3,0,32)
+        stdGL.CellPadding         = UDim2.fromOffset(3,3)
         stdGL.HorizontalAlignment = Enum.HorizontalAlignment.Left
         stdGL.SortOrder           = Enum.SortOrder.LayoutOrder
 
@@ -1005,105 +1214,118 @@ local function main()
             {txt="WINGS",      mode="wings",     col=Color3.fromRGB(100,220,255)},
         }
 
-        for idx, m in ipairs(stdModes) do
+        for idx,m in ipairs(stdModes) do
             local btn = Instance.new("TextButton")
             btn.Text             = m.txt
-            btn.BackgroundColor3 = Color3.fromRGB(26, 14, 55)
+            btn.BackgroundColor3 = Color3.fromRGB(26,14,55)
             btn.TextColor3       = m.col
-            btn.TextSize         = 11
+            btn.TextSize         = 10
             btn.Font             = Enum.Font.GothamBold
             btn.BorderSizePixel  = 0
             btn.LayoutOrder      = idx
             btn.Parent           = stdFrame
-            Instance.new("UICorner", btn)
+            Instance.new("UICorner",btn)
 
             btn.MouseButton1Click:Connect(function()
-                if GASTER_MODES[activeMode] then destroyGasterGui() end
+                if GASTER_MODES[activeMode]  then destroyGasterGui()  end
+                if SPHERE_MODES[activeMode]  then destroySphereGui()   end
                 if CFRAME_MODES[m.mode] then
-                    for _, d in pairs(controlled) do
+                    for _,d in pairs(controlled) do
                         if d.bp and d.bp.Parent then
                             d.bp.MaxForce = Vector3.zero
                         end
                     end
                 else
-                    for _, d in pairs(controlled) do
+                    for _,d in pairs(controlled) do
                         if d.bp and d.bp.Parent then
                             d.bp.MaxForce =
-                                Vector3.new(math.huge, math.huge, math.huge)
+                                Vector3.new(math.huge,math.huge,math.huge)
                         end
                     end
                 end
                 activeMode   = m.mode
                 isActivated  = true
-                modeLbl.Text = "MODE: " .. m.mode:upper()
+                modeLbl.Text = "MODE: "..m.mode:upper()
                 sweepMap()
             end)
         end
 
-        sLabel("SPECIAL MODES", 6)
+        -- ── SPECIAL MODES ─────────────────────────────────────────────────
+        sLabel("SPECIAL MODES",6)
 
-        local spGridH = 36
+        local spRows  = math.ceil(3/2)
+        local spGridH = spRows*32+(spRows-1)*3
         local spFrame = Instance.new("Frame")
-        spFrame.Size                   = UDim2.new(1, 0, 0, spGridH)
+        spFrame.Size                   = UDim2.new(1,0,0,spGridH)
         spFrame.BackgroundTransparency = 1
         spFrame.LayoutOrder            = 7
         spFrame.Parent                 = scroll
 
-        local spGL = Instance.new("UIGridLayout", spFrame)
-        spGL.CellSize            = UDim2.new(0.5, -3, 0, 36)
-        spGL.CellPadding         = UDim2.fromOffset(4, 4)
+        local spGL = Instance.new("UIGridLayout",spFrame)
+        spGL.CellSize            = UDim2.new(0.5,-3,0,32)
+        spGL.CellPadding         = UDim2.fromOffset(3,3)
         spGL.HorizontalAlignment = Enum.HorizontalAlignment.Left
         spGL.SortOrder           = Enum.SortOrder.LayoutOrder
 
         local specialModes = {
             {txt="GASTER HAND",    mode="gasterhand",   col=Color3.fromRGB(180, 80,255)},
             {txt="2 GASTER HANDS", mode="gaster2hands", col=Color3.fromRGB(220,110,255)},
+            {txt="SPHERE",         mode="sphere",        col=Color3.fromRGB( 60,210,255)},
         }
 
-        for idx, m in ipairs(specialModes) do
+        for idx,m in ipairs(specialModes) do
             local btn = Instance.new("TextButton")
             btn.Text             = m.txt
-            btn.BackgroundColor3 = Color3.fromRGB(30, 8, 58)
+            btn.BackgroundColor3 = Color3.fromRGB(30,8,58)
             btn.TextColor3       = m.col
-            btn.TextSize         = 11
+            btn.TextSize         = 10
             btn.Font             = Enum.Font.GothamBold
             btn.BorderSizePixel  = 0
             btn.LayoutOrder      = idx
             btn.Parent           = spFrame
-            Instance.new("UICorner", btn)
+            Instance.new("UICorner",btn)
 
-            local bs     = Instance.new("UIStroke", btn)
-            bs.Color     = Color3.fromRGB(160, 50, 255)
+            local bs     = Instance.new("UIStroke",btn)
+            bs.Color     = Color3.fromRGB(160,50,255)
             bs.Thickness = 1
 
             btn.MouseButton1Click:Connect(function()
-                for _, d in pairs(controlled) do
+                -- Clean up previous special GUIs
+                destroyGasterGui()
+                destroySphereGui()
+                for _,d in pairs(controlled) do
                     if d.bp and d.bp.Parent then
                         d.bp.MaxForce = Vector3.zero
                     end
                 end
                 activeMode   = m.mode
                 isActivated  = true
-                modeLbl.Text = "MODE: " .. m.mode:upper()
-                createGasterGui()
+                modeLbl.Text = "MODE: "..m.mode:upper()
+                -- Open the correct sub-GUI
+                if GASTER_MODES[m.mode] then
+                    createGasterGui()
+                elseif SPHERE_MODES[m.mode] then
+                    createSphereGui()
+                end
                 sweepMap()
             end)
         end
 
-        sLabel("SETTINGS", 8)
+        -- ── SETTINGS ──────────────────────────────────────────────────────
+        sLabel("SETTINGS",8)
 
-        local pullTB  = makeSettingRow("PULL STRENGTH",  1500, "snake + blackhole speed", 9)
-        local radTB   = makeSettingRow("RADIUS (studs)", 7,    "formation spread size",   10)
-        local rangeTB = makeSettingRow("DETECT RANGE",   9999, "studs (9999 = full map)", 11)
+        local pullTB  = makeSettingRow("PULL STRENGTH", 1500,"snake+blackhole speed",9)
+        local radTB   = makeSettingRow("RADIUS (studs)",7,   "formation spread",    10)
+        local rangeTB = makeSettingRow("DETECT RANGE",  9999,"studs (9999=full map)",11)
 
         pullTB.FocusLost:Connect(function()
             local v = tonumber(pullTB.Text:match("^%s*(.-)%s*$"))
             if v and v > 0 then
                 pullStrength = v
-                for _, d in pairs(controlled) do
+                for _,d in pairs(controlled) do
                     if d.bp and d.bp.Parent then
                         d.bp.P = v
-                        d.bp.D = v * 0.12
+                        d.bp.D = v*0.12
                     end
                 end
                 pullTB.Text = tostring(v)
@@ -1132,17 +1354,18 @@ local function main()
             end
         end)
 
-        sLabel("ACTIONS", 12)
+        -- ── ACTIONS ───────────────────────────────────────────────────────
+        sLabel("ACTIONS",12)
 
         local scanBtn = makeSingleBtn(
             "SCAN PARTS",
-            Color3.fromRGB(18, 60, 22), Color3.fromRGB(80, 255, 120), 13)
+            Color3.fromRGB(18,60,22),Color3.fromRGB(80,255,120),13)
         local releaseBtn = makeSingleBtn(
             "RELEASE ALL",
-            Color3.fromRGB(60, 32, 8), Color3.fromRGB(255, 155, 55), 14)
+            Color3.fromRGB(60,32,8),Color3.fromRGB(255,155,55),14)
         local deactivateBtn = makeSingleBtn(
             "DEACTIVATE",
-            Color3.fromRGB(75, 8, 8), Color3.fromRGB(255, 55, 55), 15)
+            Color3.fromRGB(75,8,8),Color3.fromRGB(255,55,55),15)
 
         scanBtn.MouseButton1Click:Connect(function()
             sweepMap()
@@ -1151,6 +1374,7 @@ local function main()
         releaseBtn.MouseButton1Click:Connect(function()
             releaseAll()
             destroyGasterGui()
+            destroySphereGui()
             isActivated  = false
             activeMode   = "none"
             lastMode     = "none"
@@ -1160,6 +1384,7 @@ local function main()
         deactivateBtn.MouseButton1Click:Connect(function()
             releaseAll()
             destroyGasterGui()
+            destroySphereGui()
             isActivated = false
             activeMode  = "none"
             scriptAlive = false
@@ -1180,26 +1405,25 @@ local function main()
 
             local ib = Instance.new("TextButton")
             ib.Text             = "M"
-            ib.Size             = UDim2.fromOffset(44, 44)
-            ib.Position         = UDim2.new(1, -54, 0, 10)
-            ib.BackgroundColor3 = Color3.fromRGB(22, 10, 50)
-            ib.TextColor3       = Color3.fromRGB(195, 140, 255)
-            ib.TextSize         = 16
+            ib.Size             = UDim2.fromOffset(36,36)
+            ib.Position         = UDim2.new(1,-44,0,8)
+            ib.BackgroundColor3 = Color3.fromRGB(22,10,50)
+            ib.TextColor3       = Color3.fromRGB(195,140,255)
+            ib.TextSize         = 13
             ib.Font             = Enum.Font.GothamBold
             ib.BorderSizePixel  = 0
             ib.Parent           = miniGui
-            Instance.new("UICorner", ib)
+            Instance.new("UICorner",ib)
 
-            local ibStroke     = Instance.new("UIStroke", ib)
-            ibStroke.Color     = Color3.fromRGB(90, 40, 180)
+            local ibStroke     = Instance.new("UIStroke",ib)
+            ibStroke.Color     = Color3.fromRGB(90,40,180)
             ibStroke.Thickness = 1.5
 
             ib.MouseButton1Click:Connect(function()
                 miniGui:Destroy()
                 createGUI()
-                if GASTER_MODES[activeMode] then
-                    createGasterGui()
-                end
+                if GASTER_MODES[activeMode] then createGasterGui() end
+                if SPHERE_MODES[activeMode]  then createSphereGui()  end
             end)
         end)
 
@@ -1210,7 +1434,7 @@ local function main()
 
         local function startDrag(inp)
             dragging     = true
-            dragStartM   = Vector2.new(inp.Position.X, inp.Position.Y)
+            dragStartM   = Vector2.new(inp.Position.X,inp.Position.Y)
             dragStartPos = panel.Position
         end
 
@@ -1233,10 +1457,10 @@ local function main()
             if inp.UserInputType == Enum.UserInputType.MouseMovement
                 or inp.UserInputType == Enum.UserInputType.Touch then
                 local delta = Vector2.new(
-                    inp.Position.X, inp.Position.Y) - dragStartM
+                    inp.Position.X,inp.Position.Y) - dragStartM
                 panel.Position = UDim2.new(
-                    dragStartPos.X.Scale, dragStartPos.X.Offset + delta.X,
-                    dragStartPos.Y.Scale, dragStartPos.Y.Offset + delta.Y)
+                    dragStartPos.X.Scale,dragStartPos.X.Offset+delta.X,
+                    dragStartPos.Y.Scale,dragStartPos.Y.Offset+delta.Y)
             end
         end)
 
