@@ -26,108 +26,42 @@ local function main()
     local GASTER_MODES = { gasterhand=true, gaster2hands=true }
 
     -- ── HAND SCALE ───────────────────────────────────────────────────────
-    -- Each unit = this many studs. Bigger = fingers spread further apart.
     local HAND_SCALE = 2.8
 
-    -- Gap between fingers (in slot units) so they never touch
-    -- Finger columns: Pinky=-4, Ring=-2, Middle=0, Index=2, Thumb=5
-    --[[
-        HAND SHAPE (✋) — fingers point UP
-        Each finger is 1 slot wide with a 1-slot gap between them.
-
-        col:  -4   -2    0    2         5
-        row 7:           [M]
-        row 6:      [R]  [M]  [I]
-        row 5: [Pi] [R]  [M]  [I]
-        row 4: [Pi] [R]  [M]  [I]
-        row 3: [Pi] [R]  [M]  [I]       [T]
-        row 2: [Pi] [Pa] [Pa] [Pa]      [T]
-        row 1: [Pa] [Pa] [Pa] [Pa]      [T]
-        row 0: [Pa] [Pa] [Pa] [Pa] [Pa]
-        row-1:      [W]  [W]  [W]
-    ]]
     local HAND_SLOTS = {
         -- PINKY  (col -4, rows 2..5)
-        {x=-4, y=5},
-        {x=-4, y=4},
-        {x=-4, y=3},
-        {x=-4, y=2},
+        {x=-4, y=5}, {x=-4, y=4}, {x=-4, y=3}, {x=-4, y=2},
         -- RING   (col -2, rows 3..6)
-        {x=-2, y=6},
-        {x=-2, y=5},
-        {x=-2, y=4},
-        {x=-2, y=3},
-        -- MIDDLE (col  0, rows 3..7)  tallest
-        {x= 0, y=7},
-        {x= 0, y=6},
-        {x= 0, y=5},
-        {x= 0, y=4},
-        {x= 0, y=3},
+        {x=-2, y=6}, {x=-2, y=5}, {x=-2, y=4}, {x=-2, y=3},
+        -- MIDDLE (col  0, rows 3..7)
+        {x= 0, y=7}, {x= 0, y=6}, {x= 0, y=5}, {x= 0, y=4}, {x= 0, y=3},
         -- INDEX  (col  2, rows 3..6)
-        {x= 2, y=6},
-        {x= 2, y=5},
-        {x= 2, y=4},
-        {x= 2, y=3},
-        -- THUMB  (col  5, rows 0..2, offset lower + right)
-        {x= 5, y=2},
-        {x= 5, y=1},
-        {x= 5, y=0},
-        -- PALM   (rows 0..2, full width)
-        {x=-4, y=1},
-        {x=-2, y=1},
-        {x= 0, y=1},
-        {x= 2, y=1},
-        {x=-4, y=0},
-        {x=-2, y=0},
-        {x= 0, y=0},
-        {x= 2, y=0},
-        {x= 4, y=0},
-        -- WRIST  (row -1)
-        {x=-2, y=-1},
-        {x= 0, y=-1},
-        {x= 2, y=-1},
+        {x= 2, y=6}, {x= 2, y=5}, {x= 2, y=4}, {x= 2, y=3},
+        -- THUMB  (col  5, rows 0..2)
+        {x= 5, y=2}, {x= 5, y=1}, {x= 5, y=0},
+        -- PALM
+        {x=-4, y=1}, {x=-2, y=1}, {x= 0, y=1}, {x= 2, y=1},
+        {x=-4, y=0}, {x=-2, y=0}, {x= 0, y=0}, {x= 2, y=0}, {x= 4, y=0},
+        -- WRIST
+        {x=-2, y=-1}, {x= 0, y=-1}, {x= 2, y=-1},
     }
-    local HAND_SLOTS_COUNT = #HAND_SLOTS  -- 32
+    local HAND_SLOTS_COUNT = #HAND_SLOTS
 
-    --[[
-        POINTING BIAS (🫵)
-        Slots 1-4   = Pinky   → curl down hard
-        Slots 5-8   = Ring    → curl down hard
-        Slots 9-13  = Middle  → curl down hard
-        Slots 14-17 = Index   → NO BIAS (stays up, pointing)
-        Slots 18-20 = Thumb   → slight tuck
-        Slots 21+   = Palm/Wrist → no change
-    ]]
     local POINTING_BIAS = {
-        -- Pinky curls all the way down
         [1]=-5.0, [2]=-5.0, [3]=-5.0, [4]=-5.0,
-        -- Ring curls down
         [5]=-4.5, [6]=-4.5, [7]=-4.5, [8]=-4.5,
-        -- Middle curls down
         [9]=-5.5, [10]=-5.0, [11]=-4.0, [12]=-2.5, [13]=-1.2,
-        -- Index = pointing finger, NO bias
-        -- Thumb tucks slightly inward
         [18]=-0.6, [19]=-1.2, [20]=-1.2,
     }
 
-    --[[
-        PUNCH BIAS (👊)
-        All finger tips compress slightly so the hand looks like a fist
-    ]]
     local PUNCH_BIAS = {
-        -- Pinky folds down
         [1]=-3.0, [2]=-2.5, [3]=-1.5, [4]=-0.5,
-        -- Ring folds down
         [5]=-3.0, [6]=-2.5, [7]=-1.5, [8]=-0.5,
-        -- Middle folds down
         [9]=-3.5, [10]=-3.0, [11]=-2.0, [12]=-1.0, [13]=-0.3,
-        -- Index folds down
         [14]=-3.0, [15]=-2.5, [16]=-1.5, [17]=-0.5,
-        -- Thumb tucks across
         [18]=-0.8, [19]=-1.4, [20]=-1.4,
     }
 
-    -- Centre positions of each hand in player local space
     local HAND_RIGHT = Vector3.new( 9, 2, 1)
     local HAND_LEFT  = Vector3.new(-9, 2, 1)
 
@@ -205,7 +139,7 @@ local function main()
     -- ── BLACK HOLE FLING ─────────────────────────────────────────────────
     local function enableFling(part, data)
         if data.bav and data.bav.Parent then
-            data.bav.MaxTorque       = Vector3.new(1e6,1e6,1e6)
+            data.bav.MaxTorque       = Vector3.new(1e6, 1e6, 1e6)
             data.bav.AngularVelocity = Vector3.new(
                 math.random(-50,50), math.random(60,100), math.random(-50,50))
         end
@@ -218,13 +152,13 @@ local function main()
             if hum and hrp then
                 local dir = (hrp.Position - part.Position).Unit
                 hrp.AssemblyLinearVelocity =
-                    (dir + Vector3.new(0,0.9,0)).Unit * 160
+                    (dir + Vector3.new(0, 0.9, 0)).Unit * 160
             end
         end)
     end
 
     local function disableFling(data)
-        if data.touchConn then data.touchConn:Disconnect(); data.touchConn=nil end
+        if data.touchConn then data.touchConn:Disconnect(); data.touchConn = nil end
         if data.bav and data.bav.Parent then
             data.bav.MaxTorque       = Vector3.zero
             data.bav.AngularVelocity = Vector3.zero
@@ -314,9 +248,9 @@ local function main()
                 + cf.UpVector    * (row * 1.8 + 1))
 
         elseif mode == "box" then
-            local fV  = { cf.LookVector, -cf.LookVector,
-                          cf.RightVector,-cf.RightVector,
-                          cf.UpVector,   -cf.UpVector }
+            local fV  = { cf.LookVector,  -cf.LookVector,
+                          cf.RightVector, -cf.RightVector,
+                          cf.UpVector,    -cf.UpVector }
             local fTa = { cf.RightVector, cf.RightVector,
                           cf.LookVector,  cf.LookVector,
                           cf.RightVector, cf.RightVector }
@@ -343,52 +277,42 @@ local function main()
         local slot = HAND_SLOTS[slotIndex]
         if not slot then return CFrame.new(0, -5000, 0) end
 
-        -- Raw slot position scaled up so fingers are spread wide
         local sx = slot.x * HAND_SCALE
         local sy = slot.y * HAND_SCALE
 
-        -- ── FLOATING BOB ─────────────────────────────────────────────────
-        -- Each hand bobs at a different phase so they feel independent
         local floatY = math.sin(gt * 2.0 + sideSign * 1.2) * 1.0
 
-        -- ── ANIMATION Y BIAS ─────────────────────────────────────────────
         if gasterAnim == "pointing" then
             sy = sy + (POINTING_BIAS[slotIndex] or 0) * HAND_SCALE
         elseif gasterAnim == "punching" then
             sy = sy + (PUNCH_BIAS[slotIndex] or 0) * HAND_SCALE
         end
 
-        -- ── WAVING ───────────────────────────────────────────────────────
-        -- Rock the whole hand side to side
         local waveAngle = 0
         if gasterAnim == "waving" then
             waveAngle = math.sin(gt * 2.2) * 0.5
         end
 
-        -- ── PUNCHING ─────────────────────────────────────────────────────
-        -- Fast jab: sin * 10 = 2.5x faster than before, 8 studs range
         local punchZ = 0
         if gasterAnim == "punching" then
             punchZ = (math.sin(gt * 10) * 0.5 + 0.5) * 8
         end
 
-        -- Rotate sx for waving
         local rotX = sx * math.cos(waveAngle)
         local rotZ = sx * math.sin(waveAngle)
 
-        -- Flip X for left hand so it mirrors correctly
         local base = (sideSign == 1) and HAND_RIGHT or HAND_LEFT
 
         local localOffset = Vector3.new(
             base.X + rotX * sideSign,
-            base.Y + sy  + floatY,
+            base.Y + sy   + floatY,
             base.Z + rotZ - punchZ
         )
 
         return CFrame.new(cf:PointToWorldSpace(localOffset))
     end
 
-    -- ── BLACK HOLE PET ────────────────────────────────────────────────────
+    -- ── BLACK HOLE PET ───────────────────────────────────────────────────
     local function getBHTarget(i, cf)
         local pet = cf:PointToWorldSpace(Vector3.new(3, 1, -5))
         return pet + Vector3.new(
@@ -417,7 +341,7 @@ local function main()
         sg.Parent         = pg
         gasterSubGui      = sg
 
-        local W, H = 220, 182
+        local W, H = 220, 196
         local panel = Instance.new("Frame")
         panel.Size             = UDim2.fromOffset(W, H)
         panel.Position         = UDim2.new(0.5, 30, 0.5, -(H/2) - 130)
@@ -470,7 +394,7 @@ local function main()
             local btn = Instance.new("TextButton")
             btn.Text             = anim.txt
             btn.Size             = UDim2.new(1, -16, 0, 32)
-            btn.Position         = UDim2.fromOffset(8, 60 + (idx-1) * 38)
+            btn.Position         = UDim2.fromOffset(8, 62 + (idx-1) * 38)
             btn.BackgroundColor3 = Color3.fromRGB(22, 10, 48)
             btn.TextColor3       = anim.col
             btn.TextSize         = 12
@@ -487,8 +411,9 @@ local function main()
         end
 
         -- Drag
-        local dragging, dragStartM, dragStartPos =
-            false, Vector2.zero, UDim2.new()
+        local dragging     = false
+        local dragStartM   = Vector2.zero
+        local dragStartPos = UDim2.new()
 
         tBar.InputBegan:Connect(function(inp)
             if inp.UserInputType == Enum.UserInputType.MouseButton1
@@ -512,13 +437,10 @@ local function main()
             if not dragging then return end
             if inp.UserInputType == Enum.UserInputType.MouseMovement
                 or inp.UserInputType == Enum.UserInputType.Touch then
-                local d = Vector2.new(
-                    inp.Position.X, inp.Position.Y) - dragStartM
+                local d = Vector2.new(inp.Position.X, inp.Position.Y) - dragStartM
                 panel.Position = UDim2.new(
-                    dragStartPos.X.Scale,
-                    dragStartPos.X.Offset + d.X,
-                    dragStartPos.Y.Scale,
-                    dragStartPos.Y.Offset + d.Y)
+                    dragStartPos.X.Scale, dragStartPos.X.Offset + d.X,
+                    dragStartPos.Y.Scale, dragStartPos.Y.Offset + d.Y)
             end
         end)
         UserInputService.InputEnded:Connect(function(inp)
@@ -607,14 +529,14 @@ local function main()
 
                 if activeMode == "snake" then
                     local tgt = getSnakeTarget(i)
-                    data.bp.MaxForce = Vector3.new(math.huge,math.huge,math.huge)
+                    data.bp.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
                     data.bp.Position = tgt
                     data.bp.P        = pullStrength
                     data.bp.D        = pullStrength * 0.12
 
                 elseif activeMode == "blackhole" then
                     local tgt = getBHTarget(i, cf)
-                    data.bp.MaxForce = Vector3.new(math.huge,math.huge,math.huge)
+                    data.bp.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
                     data.bp.Position = tgt
                     data.bp.P        = pullStrength
                     data.bp.D        = pullStrength * 0.12
@@ -640,8 +562,7 @@ local function main()
 
                 elseif CFRAME_MODES[activeMode] then
                     data.bp.MaxForce = Vector3.zero
-                    part.CFrame =
-                        getFormationCF(activeMode, i, n, pos, cf, t)
+                    part.CFrame = getFormationCF(activeMode, i, n, pos, cf, t)
                 end
             end
         end
@@ -906,7 +827,7 @@ local function main()
                     for _, d in pairs(controlled) do
                         if d.bp and d.bp.Parent then
                             d.bp.MaxForce =
-                                Vector3.new(math.huge,math.huge,math.huge)
+                                Vector3.new(math.huge, math.huge, math.huge)
                         end
                     end
                 end
@@ -935,9 +856,9 @@ local function main()
 
         local specialModes = {
             {txt="GASTER HAND",    mode="gasterhand",
-             col=Color3.fromRGB(180, 80,255)},
+             col=Color3.fromRGB(180, 80, 255)},
             {txt="2 GASTER HANDS", mode="gaster2hands",
-             col=Color3.fromRGB(220,110,255)},
+             col=Color3.fromRGB(220,110, 255)},
         }
 
         for idx, m in ipairs(specialModes) do
@@ -1020,13 +941,13 @@ local function main()
 
         local scanBtn = makeSingleBtn(
             "SCAN PARTS",
-            Color3.fromRGB(18,60,22), Color3.fromRGB(80,255,120), 13)
+            Color3.fromRGB(18, 60, 22), Color3.fromRGB(80, 255, 120), 13)
         local releaseBtn = makeSingleBtn(
             "RELEASE ALL",
-            Color3.fromRGB(60,32,8),  Color3.fromRGB(255,155,55), 14)
+            Color3.fromRGB(60, 32, 8),  Color3.fromRGB(255, 155, 55), 14)
         local deactivateBtn = makeSingleBtn(
             "DEACTIVATE",
-            Color3.fromRGB(75,8,8),   Color3.fromRGB(255,55,55),  15)
+            Color3.fromRGB(75, 8, 8),   Color3.fromRGB(255, 55, 55),  15)
 
         scanBtn.MouseButton1Click:Connect(function()
             sweepMap()
@@ -1041,6 +962,10 @@ local function main()
             modeLbl.Text = "MODE: NONE"
         end)
 
+        -- ── THE BUG WAS HERE ─────────────────────────────────────────────
+        -- Previously: local icon = pg:FindFirstChild("Manip\nIcon")
+        -- The string was split across two lines which breaks it.
+        -- Fixed: the name is on one clean line = "ManipIcon"
         deactivateBtn.MouseButton1Click:Connect(function()
             releaseAll()
             destroyGasterGui()
@@ -1048,8 +973,7 @@ local function main()
             activeMode  = "none"
             scriptAlive = false
             gui:Destroy()
-            local icon = pg:FindFirstChild("Manip
-Icon")
+            local icon = pg:FindFirstChild("ManipIcon")
             if icon then icon:Destroy() end
             print("Deactivated.")
         end)
@@ -1116,6 +1040,7 @@ Icon")
         UserInputService.InputChanged:Connect(function(inp)
             if not dragging then return end
             if inp.UserInputType == Enum.UserInputType.MouseMovement
+                or inp.UserInputType == Enum.UserInputType.
                 or inp.UserInputType == Enum.UserInputType.Touch then
                 local d = Vector2.new(inp.Position.X, inp.Position.Y) - dragStartM
                 panel.Position = UDim2.new(
@@ -1130,14 +1055,14 @@ Icon")
                 dragging = false
             end
         end)
-    end  -- end createGUI
+    end -- end createGUI
 
     -- ── BOOT ─────────────────────────────────────────────────────────────
     createGUI()
     task.spawn(mainLoop)
     task.spawn(scanLoop)
     print("MANIPULATOR KII — Ready.")
-end  -- end main
+end -- end main
 
 local ok, err = pcall(main)
 if not ok then warn("MANIPULATOR KII ERROR: " .. tostring(err)) end
