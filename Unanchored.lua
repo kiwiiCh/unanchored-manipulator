@@ -26,7 +26,7 @@ local function main()
 
     local HAND_SCALE = 2.8
 
-    -- ── FINGER SLOTS (original) ───────────────────────────────────────────
+    -- ── FINGER SLOTS ─────────────────────────────────────────────────────
     local HAND_SLOTS = {
         {x=-4, y=5}, {x=-4, y=4}, {x=-4, y=3}, {x=-4, y=2},
         {x=-2, y=6}, {x=-2, y=5}, {x=-2, y=4}, {x=-2, y=3},
@@ -38,7 +38,7 @@ local function main()
         {x=-2, y=-1}, {x= 0, y=-1}, {x= 2, y=-1},
     }
 
-    -- ── PALM SLOTS (added) ────────────────────────────────────────────────
+    -- ── PALM SLOTS ───────────────────────────────────────────────────────
     local PALM_SLOTS = {
         {x=-3, y= 2}, {x=-1, y= 2}, {x= 1, y= 2}, {x= 3, y= 2},
         {x=-3, y= 1}, {x=-1, y= 1}, {x= 1, y= 1}, {x= 3, y= 1},
@@ -47,7 +47,7 @@ local function main()
         {x=-2, y=-2}, {x= 0, y=-2}, {x= 2, y=-2},
     }
 
-    -- ── COMBINED SLOTS ───────────────────────────────────────────────────
+    -- ── COMBINED HAND SLOTS ──────────────────────────────────────────────
     local ALL_HAND_SLOTS = {}
     for _, s in ipairs(HAND_SLOTS) do
         table.insert(ALL_HAND_SLOTS, {x=s.x, y=s.y, isPalm=false})
@@ -55,49 +55,126 @@ local function main()
     for _, s in ipairs(PALM_SLOTS) do
         table.insert(ALL_HAND_SLOTS, {x=s.x, y=s.y, isPalm=true})
     end
-
     local HAND_SLOTS_COUNT = #ALL_HAND_SLOTS
 
     local POINTING_BIAS = {
-        [1]=-5.0, [2]=-5.0, [3]=-5.0, [4]=-5.0,
-        [5]=-4.5, [6]=-4.5, [7]=-4.5, [8]=-4.5,
-        [9]=-5.5, [10]=-5.0, [11]=-4.0, [12]=-2.5, [13]=-1.2,
-        [18]=-0.6, [19]=-1.2, [20]=-1.2,
+        [1]=-5.0,[2]=-5.0,[3]=-5.0,[4]=-5.0,
+        [5]=-4.5,[6]=-4.5,[7]=-4.5,[8]=-4.5,
+        [9]=-5.5,[10]=-5.0,[11]=-4.0,[12]=-2.5,[13]=-1.2,
+        [18]=-0.6,[19]=-1.2,[20]=-1.2,
     }
-
     local PUNCH_BIAS = {
-        [1]=-3.0, [2]=-2.5, [3]=-1.5, [4]=-0.5,
-        [5]=-3.0, [6]=-2.5, [7]=-1.5, [8]=-0.5,
-        [9]=-3.5, [10]=-3.0, [11]=-2.0, [12]=-1.0, [13]=-0.3,
-        [14]=-3.0, [15]=-2.5, [16]=-1.5, [17]=-0.5,
-        [18]=-0.8, [19]=-1.4, [20]=-1.4,
+        [1]=-3.0,[2]=-2.5,[3]=-1.5,[4]=-0.5,
+        [5]=-3.0,[6]=-2.5,[7]=-1.5,[8]=-0.5,
+        [9]=-3.5,[10]=-3.0,[11]=-2.0,[12]=-1.0,[13]=-0.3,
+        [14]=-3.0,[15]=-2.5,[16]=-1.5,[17]=-0.5,
+        [18]=-0.8,[19]=-1.4,[20]=-1.4,
     }
 
     local HAND_RIGHT = Vector3.new( 9, 2, 1)
     local HAND_LEFT  = Vector3.new(-9, 2, 1)
 
-    -- ── WING LAYOUT ───────────────────────────────────────────────────────
-    -- Each feather: {row, col} where row=0 is topmost, col goes outward
-    -- sideSign = 1 for right wing, -1 for left wing
-    local WING_FEATHERS = {}
-    -- Build a bird-wing shape: 5 rows, each row has more feathers outward
-    local wingRows = {
-        {count=4, rowY= 4},
-        {count=5, rowY= 2},
-        {count=6, rowY= 0},
-        {count=5, rowY=-2},
-        {count=4, rowY=-4},
+    -- ═══════════════════════════════════════════════════════════════
+    -- ANGEL WING BLUEPRINT
+    -- The wing is built in LOCAL space relative to the shoulder.
+    -- outX = how far outward from body (positive = away from body)
+    -- baseY = vertical position (0 = shoulder height)
+    -- baseZ = forward/back offset for feather layering
+    -- layer = 1 primary (longest), 2 secondary, 3 covert (base)
+    --
+    -- RIGHT WING viewed from above (Z = forward):
+    --
+    --  Body
+    --   |
+    --   |  [3:covert]  short feathers near shoulder
+    --   |  [2:secondary] medium arc sweeping out+up
+    --   |  [1:primary]  long feathers sweeping out+down in arc
+    --   |
+    --   shoulder -----> outward (X)
+    --
+    -- The "door hinge" rotation pivots at the shoulder (outX=0)
+    -- Wing OPENS = rotates outward flat, CLOSES = folds against body
+    -- ═══════════════════════════════════════════════════════════════
+
+    -- PRIMARY FEATHERS: long sweeping arc, 8 feathers per wing
+    -- They arc from shoulder height down to tip
+    -- outX goes 1..8, baseY curves downward like a real wing tip
+    local WING_POINTS = {}
+
+    -- Primary feathers (longest, form the main wing shape)
+    -- Arc: starts at shoulder level, curves outward and downward
+    local primaryFeathers = {
+        -- {outX, baseY, baseZ}   outX=1 near body, outX=8 = tip
+        {1, 1.0,  0.0},
+        {2, 1.5,  0.1},
+        {3, 1.8,  0.2},
+        {4, 1.6,  0.2},
+        {5, 1.0,  0.1},
+        {6, 0.2,  0.0},
+        {7,-0.8, -0.1},
+        {8,-2.0, -0.2},  -- wingtip curves downward
     }
-    for rowIdx, row in ipairs(wingRows) do
-        for c = 1, row.count do
-            table.insert(WING_FEATHERS, {
-                colX = c,         -- distance outward from body
-                rowY = row.rowY,  -- vertical position
-                rowIdx = rowIdx,  -- used for phase offset in flap
+    -- Each primary feather gets 3 parts (root, mid, tip) to show length
+    for fi, f in ipairs(primaryFeathers) do
+        for seg = 1, 3 do
+            -- seg=1 root (near body), seg=3 = tip of feather
+            local taper = (seg - 1) / 2  -- 0, 0.5, 1
+            table.insert(WING_POINTS, {
+                outX   = f[1] * 2.2 + taper * 0.8,
+                baseY  = f[2] - taper * 1.2,  -- feathers angle downward
+                baseZ  = f[3] - taper * 0.3,
+                layer  = 1,
+                fi     = fi,
             })
         end
     end
-    local WING_FEATHER_COUNT = #WING_FEATHERS
+
+    -- Secondary feathers (medium length, upper part of wing)
+    -- Sit above the primaries, form the top arc of the wing
+    local secondaryFeathers = {
+        {1,  3.0,  0.3},
+        {2,  3.8,  0.4},
+        {3,  4.2,  0.4},
+        {4,  4.0,  0.3},
+        {5,  3.4,  0.2},
+        {6,  2.4,  0.1},
+    }
+    for fi, f in ipairs(secondaryFeathers) do
+        for seg = 1, 2 do
+            local taper = (seg - 1)
+            table.insert(WING_POINTS, {
+                outX   = f[1] * 2.0 + taper * 0.5,
+                baseY  = f[2] - taper * 0.6,
+                baseZ  = f[3],
+                layer  = 2,
+                fi     = fi,
+            })
+        end
+    end
+
+    -- Covert feathers (short, at the base/shoulder of the wing)
+    -- These are the small feathers that cover the base
+    local covertFeathers = {
+        {0.5, 2.0,  0.5},
+        {1.0, 2.8,  0.6},
+        {1.5, 3.2,  0.6},
+        {2.0, 3.0,  0.5},
+        {2.5, 2.5,  0.4},
+        {0.5, 1.2,  0.4},
+        {1.0, 1.5,  0.5},
+        {1.5, 1.8,  0.5},
+    }
+    for _, f in ipairs(covertFeathers) do
+        table.insert(WING_POINTS, {
+            outX  = f[1] * 2.0,
+            baseY = f[2],
+            baseZ = f[3],
+            layer = 3,
+            fi    = 1,
+        })
+    end
+
+    local WING_POINT_COUNT = #WING_POINTS
 
     local controlled     = {}
     local partCount      = 0
@@ -174,18 +251,18 @@ local function main()
         if data.bav and data.bav.Parent then
             data.bav.MaxTorque       = Vector3.new(1e6, 1e6, 1e6)
             data.bav.AngularVelocity = Vector3.new(
-                math.random(-50, 50), math.random(60, 100), math.random(-50, 50))
+                math.random(-50,50), math.random(60,100), math.random(-50,50))
         end
         if data.touchConn then data.touchConn:Disconnect() end
         data.touchConn = part.Touched:Connect(function(hit)
-            local hc = hit.Parent
+            local hc  = hit.Parent
             if Players:GetPlayerFromCharacter(hc) == player then return end
             local hum = hc:FindFirstChildOfClass("Humanoid")
             local hrp = hc:FindFirstChild("HumanoidRootPart")
             if hum and hrp then
                 local dir = (hrp.Position - part.Position).Unit
                 hrp.AssemblyLinearVelocity =
-                    (dir + Vector3.new(0, 0.9, 0)).Unit * 160
+                    (dir + Vector3.new(0,0.9,0)).Unit * 160
             end
         end)
     end
@@ -212,17 +289,16 @@ local function main()
             (part.Position - root.Position).Magnitude > detectionRange then
             return
         end
-
         local origCC    = part.CanCollide
         part.CanCollide = true
 
-        local bp    = Instance.new("BodyPosition")
-        bp.Name     = "ManipBP"
-        bp.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-        bp.P        = pullStrength
-        bp.D        = pullStrength * 0.12
-        bp.Position = part.Position
-        bp.Parent   = part
+        local bp        = Instance.new("BodyPosition")
+        bp.Name         = "ManipBP"
+        bp.MaxForce     = Vector3.new(math.huge, math.huge, math.huge)
+        bp.P            = pullStrength
+        bp.D            = pullStrength * 0.12
+        bp.Position     = part.Position
+        bp.Parent       = part
 
         local bav           = Instance.new("BodyAngularVelocity")
         bav.Name            = "ManipBAV"
@@ -231,11 +307,11 @@ local function main()
         bav.P               = 1e5
         bav.Parent          = part
 
-        local data = { bp=bp, bav=bav, touchConn=nil, origCC=origCC, ncc={} }
+        local data = {bp=bp, bav=bav, touchConn=nil, origCC=origCC, ncc={}}
         applyNoCollision(part, data)
 
         if CFRAME_MODES[activeMode] then bp.MaxForce = Vector3.zero end
-        if activeMode == "blackhole" then enableFling(part, data) end
+        if activeMode == "blackhole"  then enableFling(part, data) end
 
         controlled[part] = data
         partCount = partCount + 1
@@ -249,27 +325,103 @@ local function main()
 
     -- ── SNAKE ─────────────────────────────────────────────────────────────
     local function getSnakeTarget(i)
-        local idx = math.clamp(
-            i * SNAKE_GAP, 1, math.max(1, #snakeHistory))
+        local idx = math.clamp(i * SNAKE_GAP, 1, math.max(1, #snakeHistory))
         return snakeHistory[idx]
             or snakeHistory[#snakeHistory]
             or Vector3.zero
     end
 
+    -- ═══════════════════════════════════════════════════════════════════════
+    -- WING ANIMATION — "DOOR HINGE" ROTATION
+    --
+    -- The entire wing rotates around the spine (X axis at body center).
+    -- Think of it like 2 doors: hinge at the body, door swings open/closed.
+    --
+    -- OPEN  = wing rotates outward (away from body, nearly horizontal)
+    -- CLOSE = wing folds back toward body (nearly vertical beside body)
+    --
+    -- Rotation angle drives ALL points together so shape is preserved.
+    --
+    -- angleOpen  = most open position  (radians from vertical)
+    -- angleClose = most closed position
+    --
+    -- Each point is placed at its blueprint offset, then the whole set
+    -- is rotated around the shoulder hinge point.
+    -- ═══════════════════════════════════════════════════════════════════════
+
+    -- Wing hinge: attached at upper back, offset from root
+    local WING_SHOULDER_RIGHT = Vector3.new( 2.0, 2.5, 0.5)
+    local WING_SHOULDER_LEFT  = Vector3.new(-2.0, 2.5, 0.5)
+
+    local WING_OPEN_ANGLE  = math.rad(75)   -- open: 75° from vertical
+    local WING_CLOSE_ANGLE = math.rad(15)   -- closed: 15° from vertical
+    local WING_FLAP_SPEED  = 2.2            -- full flap cycles per second
+
+    local function getWingCF(pointIndex, sideSign, cf, t)
+        local wp = WING_POINTS[pointIndex]
+        if not wp then return CFrame.new(0, -5000, 0) end
+
+        -- Current flap angle oscillates between close and open
+        -- using a smooth sine wave — like a door swinging
+        local rawSin   = math.sin(t * WING_FLAP_SPEED * math.pi)
+        -- Remap from [-1,1] to [CLOSE, OPEN]
+        local flapT    = (rawSin + 1) / 2  -- now 0..1
+        local flapAngle = WING_CLOSE_ANGLE
+            + flapT * (WING_OPEN_ANGLE - WING_CLOSE_ANGLE)
+
+        -- Blueprint position of this point in wing-local space
+        -- outX goes away from body, baseY is up, baseZ is forward
+        local bpX = wp.outX   -- outward distance from shoulder
+        local bpY = wp.baseY  -- height above shoulder
+        local bpZ = wp.baseZ  -- forward/back from shoulder
+
+        -- Apply door-hinge rotation:
+        -- The hinge axis is the character's forward/back axis (Z axis).
+        -- outX and baseY rotate together around this hinge.
+        --
+        -- Without rotation: outX goes along RightVector, baseY goes up
+        -- After rotation by flapAngle from vertical:
+        --   rotatedX = outX * cos(flapAngle) - baseY * sin(flapAngle)  [horizontal]
+        --   rotatedY = outX * sin(flapAngle) + baseY * cos(flapAngle)  [vertical]
+        --
+        -- This preserves the shape perfectly — every point rotates together.
+        local cosA = math.cos(flapAngle)
+        local sinA = math.sin(flapAngle)
+
+        local rotatedX =  bpX * cosA - bpY * sinA
+        local rotatedY =  bpX * sinA + bpY * cosA
+        local rotatedZ =  bpZ
+
+        -- Mirror for left wing
+        rotatedX = rotatedX * sideSign
+
+        -- Shoulder anchor offset
+        local shoulder = (sideSign == 1)
+            and WING_SHOULDER_RIGHT
+            or  WING_SHOULDER_LEFT
+
+        local localPos = Vector3.new(
+            shoulder.X + rotatedX,
+            shoulder.Y + rotatedY,
+            shoulder.Z + rotatedZ
+        )
+
+        return CFrame.new(cf:PointToWorldSpace(localPos))
+    end
+
     -- ── STANDARD FORMATIONS ───────────────────────────────────────────────
     local function getFormationCF(mode, i, n, origin, cf, t)
         if mode == "heart" then
-            local a  = ((i-1) / math.max(n, 1)) * math.pi * 2
+            local a  = ((i-1) / math.max(n,1)) * math.pi * 2
             local hx =  16 * math.sin(a)^3
             local hz = -(13*math.cos(a) - 5*math.cos(2*a)
                        - 2*math.cos(3*a) - math.cos(4*a))
             local s  = radius / 16
             return CFrame.new(
-                origin + cf:VectorToWorldSpace(
-                    Vector3.new(hx*s, 0, hz*s)))
+                origin + cf:VectorToWorldSpace(Vector3.new(hx*s, 0, hz*s)))
 
         elseif mode == "rings" then
-            local a = ((i-1) / math.max(n, 1)) * math.pi * 2 + t * 1.4
+            local a = ((i-1) / math.max(n,1)) * math.pi * 2 + t * 1.4
             return CFrame.new(origin + Vector3.new(
                 math.cos(a)*radius, 0, math.sin(a)*radius))
 
@@ -284,15 +436,15 @@ local function main()
                 + cf.UpVector    * (row * 1.8 + 1))
 
         elseif mode == "box" then
-            local fV  = { cf.LookVector,  -cf.LookVector,
-                          cf.RightVector, -cf.RightVector,
-                          cf.UpVector,    -cf.UpVector }
-            local fTa = { cf.RightVector, cf.RightVector,
-                          cf.LookVector,  cf.LookVector,
-                          cf.RightVector, cf.RightVector }
-            local fTb = { cf.UpVector,    cf.UpVector,
-                          cf.UpVector,    cf.UpVector,
-                          cf.LookVector,  cf.LookVector }
+            local fV  = {cf.LookVector, -cf.LookVector,
+                         cf.RightVector,-cf.RightVector,
+                         cf.UpVector,   -cf.UpVector}
+            local fTa = {cf.RightVector, cf.RightVector,
+                         cf.LookVector,  cf.LookVector,
+                         cf.RightVector, cf.RightVector}
+            local fTb = {cf.UpVector,    cf.UpVector,
+                         cf.UpVector,    cf.UpVector,
+                         cf.LookVector,  cf.LookVector}
             local fi  = ((i-1) % 6) + 1
             local si  = math.floor((i-1) / 6)
             local col = (si % 2) - 0.5
@@ -305,33 +457,19 @@ local function main()
                 + fTb[fi] * (row * sp))
 
         elseif mode == "wings" then
-            -- Split parts evenly between left and right wing
+            -- Split parts between right and left wing
             local half = math.ceil(n / 2)
-            local sideSign, featherIdx
+            local sideSign, ptIdx
             if i <= half then
-                sideSign   =  1  -- right wing
-                featherIdx = i
+                sideSign = 1
+                ptIdx    = i
             else
-                sideSign   = -1  -- left wing
-                featherIdx = i - half
+                sideSign = -1
+                ptIdx    = i - half
             end
-
-            local fIdx = ((featherIdx - 1) % WING_FEATHER_COUNT) + 1
-            local feather = WING_FEATHERS[fIdx]
-
-            -- Flap animation: each row flaps with a phase offset
-            local flapSpeed = 3.0
-            local flapAmp   = 3.5
-            local phase     = (feather.rowIdx - 1) * 0.3
-            local flapY     = math.sin(t * flapSpeed + phase) * flapAmp
-
-            -- Spread outward from body on both sides
-            local spreadX = feather.colX * 2.2 * sideSign
-            local baseY   = feather.rowY * 1.1
-            local depthZ  = -feather.colX * 0.4  -- slight forward tilt
-
-            local localPos = Vector3.new(spreadX, baseY + flapY, depthZ)
-            return CFrame.new(origin + cf:VectorToWorldSpace(localPos))
+            -- Wrap point index within available wing points
+            local wpIdx = ((ptIdx - 1) % WING_POINT_COUNT) + 1
+            return getWingCF(wpIdx, sideSign, cf, t)
         end
 
         return CFrame.new(origin)
@@ -368,17 +506,14 @@ local function main()
         local rotX = sx * math.cos(waveAngle)
         local rotZ = sx * math.sin(waveAngle)
 
-        local base = (sideSign == 1) and HAND_RIGHT or HAND_LEFT
-
-        -- Palm sits slightly behind (positive Z offset) to form the base
-        local palmOffsetZ = slot.isPalm and 1.5 or 0
+        local base       = (sideSign == 1) and HAND_RIGHT or HAND_LEFT
+        local palmOffset = slot.isPalm and 1.5 or 0
 
         local localOffset = Vector3.new(
             base.X + rotX * sideSign,
             base.Y + sy + floatY,
-            base.Z + rotZ - punchZ + palmOffsetZ
+            base.Z + rotZ - punchZ + palmOffset
         )
-
         return CFrame.new(cf:PointToWorldSpace(localOffset))
     end
 
@@ -401,7 +536,6 @@ local function main()
 
     local function createGasterGui()
         destroyGasterGui()
-
         local pg = player:WaitForChild("PlayerGui")
         local sg = Instance.new("ScreenGui")
         sg.Name           = "GasterSubGUI"
@@ -456,16 +590,15 @@ local function main()
         animLbl.Parent                 = panel
 
         local animList = {
-            {txt="POINTING", key="pointing", col=Color3.fromRGB(100, 200, 255)},
-            {txt="WAVING",   key="waving",   col=Color3.fromRGB(100, 255, 160)},
-            {txt="PUNCHING", key="punching", col=Color3.fromRGB(255, 120, 120)},
+            {txt="POINTING", key="pointing", col=Color3.fromRGB(100,200,255)},
+            {txt="WAVING",   key="waving",   col=Color3.fromRGB(100,255,160)},
+            {txt="PUNCHING", key="punching", col=Color3.fromRGB(255,120,120)},
         }
-
         for idx, anim in ipairs(animList) do
             local btn = Instance.new("TextButton")
             btn.Text             = anim.txt
             btn.Size             = UDim2.new(1, -16, 0, 32)
-            btn.Position         = UDim2.fromOffset(8, 62 + (idx-1) * 38)
+            btn.Position         = UDim2.fromOffset(8, 62 + (idx-1)*38)
             btn.BackgroundColor3 = Color3.fromRGB(22, 10, 48)
             btn.TextColor3       = anim.col
             btn.TextSize         = 12
@@ -473,7 +606,6 @@ local function main()
             btn.BorderSizePixel  = 0
             btn.Parent           = panel
             Instance.new("UICorner", btn)
-
             btn.MouseButton1Click:Connect(function()
                 gasterAnim   = anim.key
                 gasterT      = 0
@@ -484,7 +616,6 @@ local function main()
         local dragging     = false
         local dragStartM   = Vector2.zero
         local dragStartPos = UDim2.new()
-
         tBar.InputBegan:Connect(function(inp)
             if inp.UserInputType == Enum.UserInputType.MouseButton1
                 or inp.UserInputType == Enum.UserInputType.Touch then
@@ -493,7 +624,6 @@ local function main()
                 dragStartPos = panel.Position
             end
         end)
-
         panel.InputBegan:Connect(function(inp)
             if inp.UserInputType == Enum.UserInputType.MouseButton1
                 or inp.UserInputType == Enum.UserInputType.Touch then
@@ -504,7 +634,6 @@ local function main()
                 end
             end
         end)
-
         UserInputService.InputChanged:Connect(function(inp)
             if not dragging then return end
             if inp.UserInputType == Enum.UserInputType.MouseMovement
@@ -515,7 +644,6 @@ local function main()
                     dragStartPos.Y.Scale, dragStartPos.Y.Offset + d.Y)
             end
         end)
-
         UserInputService.InputEnded:Connect(function(inp)
             if inp.UserInputType == Enum.UserInputType.MouseButton1
                 or inp.UserInputType == Enum.UserInputType.Touch then
@@ -852,7 +980,6 @@ local function main()
 
         sLabel("STANDARD MODES", 4)
 
-        -- 7 standard modes now (added WINGS), 4 rows of 2
         local stdRows  = 4
         local stdGridH = stdRows * 36 + (stdRows - 1) * 4
         local stdFrame = Instance.new("Frame")
@@ -862,19 +989,20 @@ local function main()
         stdFrame.Parent                 = scroll
 
         local stdGL = Instance.new("UIGridLayout", stdFrame)
-        stdGL.CellSize            = UDim2.new(0.5, -3, 0, 36)
+        stdGL.CellSize            = UDim2.new(
+        0.5, -3, 0, 36)
         stdGL.CellPadding         = UDim2.fromOffset(4, 4)
         stdGL.HorizontalAlignment = Enum.HorizontalAlignment.Left
         stdGL.SortOrder           = Enum.SortOrder.LayoutOrder
 
         local stdModes = {
-            {txt="SNAKE",      mode="snake",     col=Color3.fromRGB(160, 110, 255)},
-            {txt="HEART",      mode="heart",     col=Color3.fromRGB(255, 100, 150)},
-            {txt="RINGS",      mode="rings",     col=Color3.fromRGB(80,  210, 255)},
-            {txt="WALL",       mode="wall",      col=Color3.fromRGB(255, 200,  90)},
-            {txt="BOX CAGE",   mode="box",       col=Color3.fromRGB(160, 255, 100)},
-            {txt="BLACK HOLE", mode="blackhole", col=Color3.fromRGB(220, 220, 220)},
-            {txt="WINGS",      mode="wings",     col=Color3.fromRGB(100, 220, 255)},
+            {txt="SNAKE",      mode="snake",     col=Color3.fromRGB(160,110,255)},
+            {txt="HEART",      mode="heart",     col=Color3.fromRGB(255,100,150)},
+            {txt="RINGS",      mode="rings",     col=Color3.fromRGB(80, 210,255)},
+            {txt="WALL",       mode="wall",      col=Color3.fromRGB(255,200, 90)},
+            {txt="BOX CAGE",   mode="box",       col=Color3.fromRGB(160,255,100)},
+            {txt="BLACK HOLE", mode="blackhole", col=Color3.fromRGB(220,220,220)},
+            {txt="WINGS",      mode="wings",     col=Color3.fromRGB(100,220,255)},
         }
 
         for idx, m in ipairs(stdModes) do
@@ -928,8 +1056,8 @@ local function main()
         spGL.SortOrder           = Enum.SortOrder.LayoutOrder
 
         local specialModes = {
-            {txt="GASTER HAND",    mode="gasterhand",   col=Color3.fromRGB(180,  80, 255)},
-            {txt="2 GASTER HANDS", mode="gaster2hands", col=Color3.fromRGB(220, 110, 255)},
+            {txt="GASTER HAND",    mode="gasterhand",   col=Color3.fromRGB(180, 80,255)},
+            {txt="2 GASTER HANDS", mode="gaster2hands", col=Color3.fromRGB(220,110,255)},
         }
 
         for idx, m in ipairs(specialModes) do
@@ -1014,8 +1142,7 @@ local function main()
             Color3.fromRGB(60, 32, 8), Color3.fromRGB(255, 155, 55), 14)
         local deactivateBtn = makeSingleBtn(
             "DEACTIVATE",
-            Color3.fromRGB(75, 8, 8), Color3.fromRGB(255
-, 55, 55), 15)
+            Color3.fromRGB(75, 8, 8), Color3.fromRGB(255, 55, 55), 15)
 
         scanBtn.MouseButton1Click:Connect(function()
             sweepMap()
@@ -1076,6 +1203,7 @@ local function main()
             end)
         end)
 
+        -- ── DRAG ──────────────────────────────────────────────────────────
         local dragging     = false
         local dragStartM   = Vector2.zero
         local dragStartPos = UDim2.new()
@@ -1104,7 +1232,8 @@ local function main()
             if not dragging then return end
             if inp.UserInputType == Enum.UserInputType.MouseMovement
                 or inp.UserInputType == Enum.UserInputType.Touch then
-                local delta = Vector2.new(inp.Position.X, inp.Position.Y) - dragStartM
+                local delta = Vector2.new(
+                    inp.Position.X, inp.Position.Y) - dragStartM
                 panel.Position = UDim2.new(
                     dragStartPos.X.Scale, dragStartPos.X.Offset + delta.X,
                     dragStartPos.Y.Scale, dragStartPos.Y.Offset + delta.Y)
