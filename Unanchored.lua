@@ -7,7 +7,6 @@ local player = Players.LocalPlayer
 local function main()
     print("MANIPULATOR KII LOADED — " .. player.Name)
 
-    -- ── CONFIG ───────────────────────────────────────────────────────────
     local pullStrength   = 1500
     local radius         = 7
     local detectionRange = 9999
@@ -21,31 +20,43 @@ local function main()
 
     local CFRAME_MODES = {
         heart=true, rings=true, wall=true, box=true,
-        gasterhand=true, gaster2hands=true
+        gasterhand=true, gaster2hands=true, wings=true
     }
     local GASTER_MODES = { gasterhand=true, gaster2hands=true }
 
-    -- ── HAND SCALE ───────────────────────────────────────────────────────
     local HAND_SCALE = 2.8
 
+    -- ── FINGER SLOTS (original) ───────────────────────────────────────────
     local HAND_SLOTS = {
-        -- PINKY  (col -4, rows 2..5)
         {x=-4, y=5}, {x=-4, y=4}, {x=-4, y=3}, {x=-4, y=2},
-        -- RING   (col -2, rows 3..6)
         {x=-2, y=6}, {x=-2, y=5}, {x=-2, y=4}, {x=-2, y=3},
-        -- MIDDLE (col  0, rows 3..7)
         {x= 0, y=7}, {x= 0, y=6}, {x= 0, y=5}, {x= 0, y=4}, {x= 0, y=3},
-        -- INDEX  (col  2, rows 3..6)
         {x= 2, y=6}, {x= 2, y=5}, {x= 2, y=4}, {x= 2, y=3},
-        -- THUMB  (col  5, rows 0..2)
         {x= 5, y=2}, {x= 5, y=1}, {x= 5, y=0},
-        -- PALM
         {x=-4, y=1}, {x=-2, y=1}, {x= 0, y=1}, {x= 2, y=1},
         {x=-4, y=0}, {x=-2, y=0}, {x= 0, y=0}, {x= 2, y=0}, {x= 4, y=0},
-        -- WRIST
         {x=-2, y=-1}, {x= 0, y=-1}, {x= 2, y=-1},
     }
-    local HAND_SLOTS_COUNT = #HAND_SLOTS
+
+    -- ── PALM SLOTS (added) ────────────────────────────────────────────────
+    local PALM_SLOTS = {
+        {x=-3, y= 2}, {x=-1, y= 2}, {x= 1, y= 2}, {x= 3, y= 2},
+        {x=-3, y= 1}, {x=-1, y= 1}, {x= 1, y= 1}, {x= 3, y= 1},
+        {x=-3, y= 0}, {x=-1, y= 0}, {x= 1, y= 0}, {x= 3, y= 0},
+        {x=-2, y=-1}, {x= 0, y=-1}, {x= 2, y=-1},
+        {x=-2, y=-2}, {x= 0, y=-2}, {x= 2, y=-2},
+    }
+
+    -- ── COMBINED SLOTS ───────────────────────────────────────────────────
+    local ALL_HAND_SLOTS = {}
+    for _, s in ipairs(HAND_SLOTS) do
+        table.insert(ALL_HAND_SLOTS, {x=s.x, y=s.y, isPalm=false})
+    end
+    for _, s in ipairs(PALM_SLOTS) do
+        table.insert(ALL_HAND_SLOTS, {x=s.x, y=s.y, isPalm=true})
+    end
+
+    local HAND_SLOTS_COUNT = #ALL_HAND_SLOTS
 
     local POINTING_BIAS = {
         [1]=-5.0, [2]=-5.0, [3]=-5.0, [4]=-5.0,
@@ -65,7 +76,29 @@ local function main()
     local HAND_RIGHT = Vector3.new( 9, 2, 1)
     local HAND_LEFT  = Vector3.new(-9, 2, 1)
 
-    -- ── STATE ────────────────────────────────────────────────────────────
+    -- ── WING LAYOUT ───────────────────────────────────────────────────────
+    -- Each feather: {row, col} where row=0 is topmost, col goes outward
+    -- sideSign = 1 for right wing, -1 for left wing
+    local WING_FEATHERS = {}
+    -- Build a bird-wing shape: 5 rows, each row has more feathers outward
+    local wingRows = {
+        {count=4, rowY= 4},
+        {count=5, rowY= 2},
+        {count=6, rowY= 0},
+        {count=5, rowY=-2},
+        {count=4, rowY=-4},
+    }
+    for rowIdx, row in ipairs(wingRows) do
+        for c = 1, row.count do
+            table.insert(WING_FEATHERS, {
+                colX = c,         -- distance outward from body
+                rowY = row.rowY,  -- vertical position
+                rowIdx = rowIdx,  -- used for phase offset in flap
+            })
+        end
+    end
+    local WING_FEATHER_COUNT = #WING_FEATHERS
+
     local controlled     = {}
     local partCount      = 0
     local snakeT         = 0
@@ -73,7 +106,7 @@ local function main()
     local SNAKE_HIST_MAX = 600
     local SNAKE_GAP      = 8
 
-    -- ── NO-COLLISION ─────────────────────────────────────────────────────
+    -- ── NO-COLLISION ──────────────────────────────────────────────────────
     local function applyNoCollision(part, data)
         local char = player.Character
         if not char then return end
@@ -105,7 +138,7 @@ local function main()
         end
     end)
 
-    -- ── VALIDATION ───────────────────────────────────────────────────────
+    -- ── VALIDATION ────────────────────────────────────────────────────────
     local function isValid(obj)
         if not obj:IsA("BasePart") then return false end
         if obj.Anchored then return false end
@@ -117,7 +150,7 @@ local function main()
         return true
     end
 
-    -- ── RELEASE ──────────────────────────────────────────────────────────
+    -- ── RELEASE ───────────────────────────────────────────────────────────
     local function releasePart(part, data)
         clearNoCollision(data)
         if data.touchConn then data.touchConn:Disconnect() end
@@ -136,12 +169,12 @@ local function main()
         snakeHistory = {}
     end
 
-    -- ── BLACK HOLE FLING ─────────────────────────────────────────────────
+    -- ── BLACK HOLE FLING ──────────────────────────────────────────────────
     local function enableFling(part, data)
         if data.bav and data.bav.Parent then
             data.bav.MaxTorque       = Vector3.new(1e6, 1e6, 1e6)
             data.bav.AngularVelocity = Vector3.new(
-                math.random(-50,50), math.random(60,100), math.random(-50,50))
+                math.random(-50, 50), math.random(60, 100), math.random(-50, 50))
         end
         if data.touchConn then data.touchConn:Disconnect() end
         data.touchConn = part.Touched:Connect(function(hit)
@@ -158,14 +191,17 @@ local function main()
     end
 
     local function disableFling(data)
-        if data.touchConn then data.touchConn:Disconnect(); data.touchConn = nil end
+        if data.touchConn then
+            data.touchConn:Disconnect()
+            data.touchConn = nil
+        end
         if data.bav and data.bav.Parent then
             data.bav.MaxTorque       = Vector3.zero
             data.bav.AngularVelocity = Vector3.zero
         end
     end
 
-    -- ── GRAB ─────────────────────────────────────────────────────────────
+    -- ── GRAB ──────────────────────────────────────────────────────────────
     local function grabPart(part)
         if controlled[part] then return end
         local char = player.Character
@@ -180,7 +216,7 @@ local function main()
         local origCC    = part.CanCollide
         part.CanCollide = true
 
-        local bp = Instance.new("BodyPosition")
+        local bp    = Instance.new("BodyPosition")
         bp.Name     = "ManipBP"
         bp.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
         bp.P        = pullStrength
@@ -188,7 +224,7 @@ local function main()
         bp.Position = part.Position
         bp.Parent   = part
 
-        local bav = Instance.new("BodyAngularVelocity")
+        local bav           = Instance.new("BodyAngularVelocity")
         bav.Name            = "ManipBAV"
         bav.MaxTorque       = Vector3.zero
         bav.AngularVelocity = Vector3.zero
@@ -211,7 +247,7 @@ local function main()
         end
     end
 
-    -- ── SNAKE ────────────────────────────────────────────────────────────
+    -- ── SNAKE ─────────────────────────────────────────────────────────────
     local function getSnakeTarget(i)
         local idx = math.clamp(
             i * SNAKE_GAP, 1, math.max(1, #snakeHistory))
@@ -220,10 +256,10 @@ local function main()
             or Vector3.zero
     end
 
-    -- ── STANDARD FORMATIONS ──────────────────────────────────────────────
+    -- ── STANDARD FORMATIONS ───────────────────────────────────────────────
     local function getFormationCF(mode, i, n, origin, cf, t)
         if mode == "heart" then
-            local a  = ((i-1)/math.max(n,1)) * math.pi * 2
+            local a  = ((i-1) / math.max(n, 1)) * math.pi * 2
             local hx =  16 * math.sin(a)^3
             local hz = -(13*math.cos(a) - 5*math.cos(2*a)
                        - 2*math.cos(3*a) - math.cos(4*a))
@@ -233,7 +269,7 @@ local function main()
                     Vector3.new(hx*s, 0, hz*s)))
 
         elseif mode == "rings" then
-            local a = ((i-1)/math.max(n,1)) * math.pi*2 + t*1.4
+            local a = ((i-1) / math.max(n, 1)) * math.pi * 2 + t * 1.4
             return CFrame.new(origin + Vector3.new(
                 math.cos(a)*radius, 0, math.sin(a)*radius))
 
@@ -264,17 +300,46 @@ local function main()
             local sp  = radius * 0.45
             return CFrame.new(
                 origin
-                + fV[fi]*radius
-                + fTa[fi]*(col*sp)
-                + fTb[fi]*(row*sp))
+                + fV[fi]  * radius
+                + fTa[fi] * (col * sp)
+                + fTb[fi] * (row * sp))
+
+        elseif mode == "wings" then
+            -- Split parts evenly between left and right wing
+            local half = math.ceil(n / 2)
+            local sideSign, featherIdx
+            if i <= half then
+                sideSign   =  1  -- right wing
+                featherIdx = i
+            else
+                sideSign   = -1  -- left wing
+                featherIdx = i - half
+            end
+
+            local fIdx = ((featherIdx - 1) % WING_FEATHER_COUNT) + 1
+            local feather = WING_FEATHERS[fIdx]
+
+            -- Flap animation: each row flaps with a phase offset
+            local flapSpeed = 3.0
+            local flapAmp   = 3.5
+            local phase     = (feather.rowIdx - 1) * 0.3
+            local flapY     = math.sin(t * flapSpeed + phase) * flapAmp
+
+            -- Spread outward from body on both sides
+            local spreadX = feather.colX * 2.2 * sideSign
+            local baseY   = feather.rowY * 1.1
+            local depthZ  = -feather.colX * 0.4  -- slight forward tilt
+
+            local localPos = Vector3.new(spreadX, baseY + flapY, depthZ)
+            return CFrame.new(origin + cf:VectorToWorldSpace(localPos))
         end
 
         return CFrame.new(origin)
     end
 
-    -- ── GASTER HAND CFrame ───────────────────────────────────────────────
+    -- ── GASTER HAND CFrame ────────────────────────────────────────────────
     local function getGasterCF(slotIndex, sideSign, cf, gt)
-        local slot = HAND_SLOTS[slotIndex]
+        local slot = ALL_HAND_SLOTS[slotIndex]
         if not slot then return CFrame.new(0, -5000, 0) end
 
         local sx = slot.x * HAND_SCALE
@@ -282,10 +347,12 @@ local function main()
 
         local floatY = math.sin(gt * 2.0 + sideSign * 1.2) * 1.0
 
-        if gasterAnim == "pointing" then
-            sy = sy + (POINTING_BIAS[slotIndex] or 0) * HAND_SCALE
-        elseif gasterAnim == "punching" then
-            sy = sy + (PUNCH_BIAS[slotIndex] or 0) * HAND_SCALE
+        if not slot.isPalm then
+            if gasterAnim == "pointing" then
+                sy = sy + (POINTING_BIAS[slotIndex] or 0) * HAND_SCALE
+            elseif gasterAnim == "punching" then
+                sy = sy + (PUNCH_BIAS[slotIndex] or 0) * HAND_SCALE
+            end
         end
 
         local waveAngle = 0
@@ -294,7 +361,7 @@ local function main()
         end
 
         local punchZ = 0
-        if gasterAnim == "punching" then
+        if gasterAnim == "punching" and not slot.isPalm then
             punchZ = (math.sin(gt * 10) * 0.5 + 0.5) * 8
         end
 
@@ -303,16 +370,19 @@ local function main()
 
         local base = (sideSign == 1) and HAND_RIGHT or HAND_LEFT
 
+        -- Palm sits slightly behind (positive Z offset) to form the base
+        local palmOffsetZ = slot.isPalm and 1.5 or 0
+
         local localOffset = Vector3.new(
             base.X + rotX * sideSign,
-            base.Y + sy   + floatY,
-            base.Z + rotZ - punchZ
+            base.Y + sy + floatY,
+            base.Z + rotZ - punchZ + palmOffsetZ
         )
 
         return CFrame.new(cf:PointToWorldSpace(localOffset))
     end
 
-    -- ── BLACK HOLE PET ───────────────────────────────────────────────────
+    -- ── BLACK HOLE PET TARGET ─────────────────────────────────────────────
     local function getBHTarget(i, cf)
         local pet = cf:PointToWorldSpace(Vector3.new(3, 1, -5))
         return pet + Vector3.new(
@@ -321,7 +391,7 @@ local function main()
             math.sin(i * 31.9) * 0.2)
     end
 
-    -- ── GASTER SUB-GUI ───────────────────────────────────────────────────
+    -- ── GASTER SUB-GUI ────────────────────────────────────────────────────
     local function destroyGasterGui()
         if gasterSubGui and gasterSubGui.Parent then
             gasterSubGui:Destroy()
@@ -349,7 +419,8 @@ local function main()
         panel.BorderSizePixel  = 0
         panel.Parent           = sg
         Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 8)
-        local ps = Instance.new("UIStroke", panel)
+
+        local ps     = Instance.new("UIStroke", panel)
         ps.Color     = Color3.fromRGB(180, 60, 255)
         ps.Thickness = 1.5
 
@@ -385,9 +456,9 @@ local function main()
         animLbl.Parent                 = panel
 
         local animList = {
-            {txt="🫵  POINTING", key="pointing", col=Color3.fromRGB(100,200,255)},
-            {txt="✋  WAVING",   key="waving",   col=Color3.fromRGB(100,255,160)},
-            {txt="👊  PUNCHING", key="punching", col=Color3.fromRGB(255,120,120)},
+            {txt="POINTING", key="pointing", col=Color3.fromRGB(100, 200, 255)},
+            {txt="WAVING",   key="waving",   col=Color3.fromRGB(100, 255, 160)},
+            {txt="PUNCHING", key="punching", col=Color3.fromRGB(255, 120, 120)},
         }
 
         for idx, anim in ipairs(animList) do
@@ -410,7 +481,6 @@ local function main()
             end)
         end
 
-        -- Drag
         local dragging     = false
         local dragStartM   = Vector2.zero
         local dragStartPos = UDim2.new()
@@ -423,6 +493,7 @@ local function main()
                 dragStartPos = panel.Position
             end
         end)
+
         panel.InputBegan:Connect(function(inp)
             if inp.UserInputType == Enum.UserInputType.MouseButton1
                 or inp.UserInputType == Enum.UserInputType.Touch then
@@ -433,6 +504,7 @@ local function main()
                 end
             end
         end)
+
         UserInputService.InputChanged:Connect(function(inp)
             if not dragging then return end
             if inp.UserInputType == Enum.UserInputType.MouseMovement
@@ -443,6 +515,7 @@ local function main()
                     dragStartPos.Y.Scale, dragStartPos.Y.Offset + d.Y)
             end
         end)
+
         UserInputService.InputEnded:Connect(function(inp)
             if inp.UserInputType == Enum.UserInputType.MouseButton1
                 or inp.UserInputType == Enum.UserInputType.Touch then
@@ -451,7 +524,7 @@ local function main()
         end)
     end
 
-    -- ── MAIN LOOP ────────────────────────────────────────────────────────
+    -- ── MAIN LOOP ─────────────────────────────────────────────────────────
     local lastMode = "none"
 
     local function mainLoop()
@@ -568,7 +641,7 @@ local function main()
         end
     end
 
-    -- ── SCAN LOOP ────────────────────────────────────────────────────────
+    -- ── SCAN LOOP ─────────────────────────────────────────────────────────
     local function scanLoop()
         while scriptAlive do
             if isActivated and activeMode ~= "none" then
@@ -585,7 +658,7 @@ local function main()
         end
     end
 
-    -- ── MAIN GUI ─────────────────────────────────────────────────────────
+    -- ── MAIN GUI ──────────────────────────────────────────────────────────
     local function createGUI()
         local pg  = player:WaitForChild("PlayerGui")
         local old = pg:FindFirstChild("ManipGUI")
@@ -608,7 +681,8 @@ local function main()
         panel.ClipsDescendants = true
         panel.Parent           = gui
         Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 8)
-        local pStroke = Instance.new("UIStroke", panel)
+
+        local pStroke     = Instance.new("UIStroke", panel)
         pStroke.Color     = Color3.fromRGB(90, 40, 180)
         pStroke.Thickness = 1.5
 
@@ -743,7 +817,6 @@ local function main()
             return tb
         end
 
-        -- STATUS
         sLabel("STATUS", 1)
 
         local statusLbl = Instance.new("TextLabel")
@@ -777,11 +850,11 @@ local function main()
             end
         end)
 
-        -- STANDARD MODES
         sLabel("STANDARD MODES", 4)
 
-        local stdRows  = 3
-        local stdGridH = stdRows * 36 + (stdRows-1) * 4
+        -- 7 standard modes now (added WINGS), 4 rows of 2
+        local stdRows  = 4
+        local stdGridH = stdRows * 36 + (stdRows - 1) * 4
         local stdFrame = Instance.new("Frame")
         stdFrame.Size                   = UDim2.new(1, 0, 0, stdGridH)
         stdFrame.BackgroundTransparency = 1
@@ -795,12 +868,13 @@ local function main()
         stdGL.SortOrder           = Enum.SortOrder.LayoutOrder
 
         local stdModes = {
-            {txt="SNAKE",      mode="snake",     col=Color3.fromRGB(160,110,255)},
-            {txt="HEART",      mode="heart",     col=Color3.fromRGB(255,100,150)},
-            {txt="RINGS",      mode="rings",     col=Color3.fromRGB(80, 210,255)},
-            {txt="WALL",       mode="wall",      col=Color3.fromRGB(255,200, 90)},
-            {txt="BOX CAGE",   mode="box",       col=Color3.fromRGB(160,255,100)},
-            {txt="BLACK HOLE", mode="blackhole", col=Color3.fromRGB(220,220,220)},
+            {txt="SNAKE",      mode="snake",     col=Color3.fromRGB(160, 110, 255)},
+            {txt="HEART",      mode="heart",     col=Color3.fromRGB(255, 100, 150)},
+            {txt="RINGS",      mode="rings",     col=Color3.fromRGB(80,  210, 255)},
+            {txt="WALL",       mode="wall",      col=Color3.fromRGB(255, 200,  90)},
+            {txt="BOX CAGE",   mode="box",       col=Color3.fromRGB(160, 255, 100)},
+            {txt="BLACK HOLE", mode="blackhole", col=Color3.fromRGB(220, 220, 220)},
+            {txt="WINGS",      mode="wings",     col=Color3.fromRGB(100, 220, 255)},
         }
 
         for idx, m in ipairs(stdModes) do
@@ -838,7 +912,6 @@ local function main()
             end)
         end
 
-        -- SPECIAL MODES
         sLabel("SPECIAL MODES", 6)
 
         local spGridH = 36
@@ -855,10 +928,8 @@ local function main()
         spGL.SortOrder           = Enum.SortOrder.LayoutOrder
 
         local specialModes = {
-            {txt="GASTER HAND",    mode="gasterhand",
-             col=Color3.fromRGB(180, 80, 255)},
-            {txt="2 GASTER HANDS", mode="gaster2hands",
-             col=Color3.fromRGB(220,110, 255)},
+            {txt="GASTER HAND",    mode="gasterhand",   col=Color3.fromRGB(180,  80, 255)},
+            {txt="2 GASTER HANDS", mode="gaster2hands", col=Color3.fromRGB(220, 110, 255)},
         }
 
         for idx, m in ipairs(specialModes) do
@@ -872,7 +943,8 @@ local function main()
             btn.LayoutOrder      = idx
             btn.Parent           = spFrame
             Instance.new("UICorner", btn)
-            local bs = Instance.new("UIStroke", btn)
+
+            local bs     = Instance.new("UIStroke", btn)
             bs.Color     = Color3.fromRGB(160, 50, 255)
             bs.Thickness = 1
 
@@ -890,15 +962,11 @@ local function main()
             end)
         end
 
-        -- SETTINGS
         sLabel("SETTINGS", 8)
 
-        local pullTB  = makeSettingRow(
-            "PULL STRENGTH",  1500, "snake + blackhole speed", 9)
-        local radTB   = makeSettingRow(
-            "RADIUS (studs)", 7,    "formation spread size",   10)
-        local rangeTB = makeSettingRow(
-            "DETECT RANGE",   9999, "studs (9999 = full map)", 11)
+        local pullTB  = makeSettingRow("PULL STRENGTH",  1500, "snake + blackhole speed", 9)
+        local radTB   = makeSettingRow("RADIUS (studs)", 7,    "formation spread size",   10)
+        local rangeTB = makeSettingRow("DETECT RANGE",   9999, "studs (9999 = full map)", 11)
 
         pullTB.FocusLost:Connect(function()
             local v = tonumber(pullTB.Text:match("^%s*(.-)%s*$"))
@@ -919,7 +987,7 @@ local function main()
         radTB.FocusLost:Connect(function()
             local v = tonumber(radTB.Text:match("^%s*(.-)%s*$"))
             if v and v > 0 then
-                radius = v
+                radius     = v
                 radTB.Text = tostring(v)
             else
                 radTB.Text = tostring(radius)
@@ -930,13 +998,12 @@ local function main()
             local v = tonumber(rangeTB.Text:match("^%s*(.-)%s*$"))
             if v and v > 0 then
                 detectionRange = v
-                rangeTB.Text = tostring(v)
+                rangeTB.Text   = tostring(v)
             else
                 rangeTB.Text = tostring(detectionRange)
             end
         end)
 
-        -- ACTIONS
         sLabel("ACTIONS", 12)
 
         local scanBtn = makeSingleBtn(
@@ -944,10 +1011,11 @@ local function main()
             Color3.fromRGB(18, 60, 22), Color3.fromRGB(80, 255, 120), 13)
         local releaseBtn = makeSingleBtn(
             "RELEASE ALL",
-            Color3.fromRGB(60, 32, 8),  Color3.fromRGB(255, 155, 55), 14)
+            Color3.fromRGB(60, 32, 8), Color3.fromRGB(255, 155, 55), 14)
         local deactivateBtn = makeSingleBtn(
             "DEACTIVATE",
-            Color3.fromRGB(75, 8, 8),   Color3.fromRGB(255, 55, 55),  15)
+            Color3.fromRGB(75, 8, 8), Color3.fromRGB(255
+, 55, 55), 15)
 
         scanBtn.MouseButton1Click:Connect(function()
             sweepMap()
@@ -962,10 +1030,6 @@ local function main()
             modeLbl.Text = "MODE: NONE"
         end)
 
-        -- ── THE BUG WAS HERE ─────────────────────────────────────────────
-        -- Previously: local icon = pg:FindFirstChild("Manip\nIcon")
-        -- The string was split across two lines which breaks it.
-        -- Fixed: the name is on one clean line = "ManipIcon"
         deactivateBtn.MouseButton1Click:Connect(function()
             releaseAll()
             destroyGasterGui()
@@ -975,10 +1039,9 @@ local function main()
             gui:Destroy()
             local icon = pg:FindFirstChild("ManipIcon")
             if icon then icon:Destroy() end
-            print("Deactivated.")
+            print("MANIPULATOR KII — Deactivated.")
         end)
 
-        -- Close → mini icon
         closeBtn.MouseButton1Click:Connect(function()
             gui:Destroy()
 
@@ -999,7 +1062,8 @@ local function main()
             ib.BorderSizePixel  = 0
             ib.Parent           = miniGui
             Instance.new("UICorner", ib)
-            local ibStroke = Instance.new("UIStroke", ib)
+
+            local ibStroke     = Instance.new("UIStroke", ib)
             ibStroke.Color     = Color3.fromRGB(90, 40, 180)
             ibStroke.Thickness = 1.5
 
@@ -1012,7 +1076,6 @@ local function main()
             end)
         end)
 
-        -- ── DRAG (main panel) ─────────────────────────────────────────────
         local dragging     = false
         local dragStartM   = Vector2.zero
         local dragStartPos = UDim2.new()
@@ -1040,12 +1103,11 @@ local function main()
         UserInputService.InputChanged:Connect(function(inp)
             if not dragging then return end
             if inp.UserInputType == Enum.UserInputType.MouseMovement
-                or inp.UserInputType == Enum.UserInputType.
                 or inp.UserInputType == Enum.UserInputType.Touch then
-                local d = Vector2.new(inp.Position.X, inp.Position.Y) - dragStartM
+                local delta = Vector2.new(inp.Position.X, inp.Position.Y) - dragStartM
                 panel.Position = UDim2.new(
-                    dragStartPos.X.Scale, dragStartPos.X.Offset + d.X,
-                    dragStartPos.Y.Scale, dragStartPos.Y.Offset + d.Y)
+                    dragStartPos.X.Scale, dragStartPos.X.Offset + delta.X,
+                    dragStartPos.Y.Scale, dragStartPos.Y.Offset + delta.Y)
             end
         end)
 
@@ -1055,14 +1117,11 @@ local function main()
                 dragging = false
             end
         end)
-    end -- end createGUI
+    end
 
-    -- ── BOOT ─────────────────────────────────────────────────────────────
     createGUI()
     task.spawn(mainLoop)
     task.spawn(scanLoop)
-    print("MANIPULATOR KII — Ready.")
-end -- end main
+end
 
-local ok, err = pcall(main)
-if not ok then warn("MANIPULATOR KII ERROR: " .. tostring(err)) end
+main()
