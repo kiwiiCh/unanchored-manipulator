@@ -25,80 +25,111 @@ local function main()
     }
     local GASTER_MODES = { gasterhand=true, gaster2hands=true }
 
-    -- ── GASTER HAND SLOT TABLE ───────────────────────────────────────────
-    --[[
-        30 slots shaped like ✋
-        Fingers point UPWARD, thumb offset to the right
+    -- ── HAND SCALE ───────────────────────────────────────────────────────
+    -- Each unit = this many studs. Bigger = fingers spread further apart.
+    local HAND_SCALE = 2.8
 
-              col: -2  -1   0   1        3
-        row 6:          [M]
-        row 5:     [R] [M] [I]
-        row 4: [Pi][R] [M] [I]
-        row 3: [Pi][R] [M] [I]           [T]
-        row 2: [Pi][P] [P] [P]           [T]
-        row 1: [Pa][Pa][Pa][Pa]          [T]
-        row 0: [Pa][Pa][Pa][Pa][Pa]
-        row-1:     [W] [W] [W]
+    -- Gap between fingers (in slot units) so they never touch
+    -- Finger columns: Pinky=-4, Ring=-2, Middle=0, Index=2, Thumb=5
+    --[[
+        HAND SHAPE (✋) — fingers point UP
+        Each finger is 1 slot wide with a 1-slot gap between them.
+
+        col:  -4   -2    0    2         5
+        row 7:           [M]
+        row 6:      [R]  [M]  [I]
+        row 5: [Pi] [R]  [M]  [I]
+        row 4: [Pi] [R]  [M]  [I]
+        row 3: [Pi] [R]  [M]  [I]       [T]
+        row 2: [Pi] [Pa] [Pa] [Pa]      [T]
+        row 1: [Pa] [Pa] [Pa] [Pa]      [T]
+        row 0: [Pa] [Pa] [Pa] [Pa] [Pa]
+        row-1:      [W]  [W]  [W]
     ]]
     local HAND_SLOTS = {
-        -- PINKY (col -2, rows 2-4)
-        {x=-2, y=4}, {x=-2, y=3}, {x=-2, y=2},
-        -- RING (col -1, rows 2-5)
-        {x=-1, y=5}, {x=-1, y=4}, {x=-1, y=3}, {x=-1, y=2},
-        -- MIDDLE (col 0, rows 2-6) tallest finger
-        {x=0,  y=6}, {x=0,  y=5}, {x=0,  y=4}, {x=0,  y=3}, {x=0,  y=2},
-        -- INDEX (col 1, rows 2-5)
-        {x=1,  y=5}, {x=1,  y=4}, {x=1,  y=3}, {x=1,  y=2},
-        -- THUMB (col 3, offset right and lower)
-        {x=3,  y=3}, {x=3,  y=2}, {x=3,  y=1},
-        -- PALM (rows 0-1)
-        {x=-2, y=1}, {x=-1, y=1}, {x=0,  y=1}, {x=1,  y=1},
-        {x=-2, y=0}, {x=-1, y=0}, {x=0,  y=0}, {x=1,  y=0}, {x=2,  y=0},
-        -- WRIST (row -1)
-        {x=-1, y=-1}, {x=0, y=-1}, {x=1,  y=-1},
+        -- PINKY  (col -4, rows 2..5)
+        {x=-4, y=5},
+        {x=-4, y=4},
+        {x=-4, y=3},
+        {x=-4, y=2},
+        -- RING   (col -2, rows 3..6)
+        {x=-2, y=6},
+        {x=-2, y=5},
+        {x=-2, y=4},
+        {x=-2, y=3},
+        -- MIDDLE (col  0, rows 3..7)  tallest
+        {x= 0, y=7},
+        {x= 0, y=6},
+        {x= 0, y=5},
+        {x= 0, y=4},
+        {x= 0, y=3},
+        -- INDEX  (col  2, rows 3..6)
+        {x= 2, y=6},
+        {x= 2, y=5},
+        {x= 2, y=4},
+        {x= 2, y=3},
+        -- THUMB  (col  5, rows 0..2, offset lower + right)
+        {x= 5, y=2},
+        {x= 5, y=1},
+        {x= 5, y=0},
+        -- PALM   (rows 0..2, full width)
+        {x=-4, y=1},
+        {x=-2, y=1},
+        {x= 0, y=1},
+        {x= 2, y=1},
+        {x=-4, y=0},
+        {x=-2, y=0},
+        {x= 0, y=0},
+        {x= 2, y=0},
+        {x= 4, y=0},
+        -- WRIST  (row -1)
+        {x=-2, y=-1},
+        {x= 0, y=-1},
+        {x= 2, y=-1},
     }
-    local HAND_SLOTS_COUNT = #HAND_SLOTS  -- 30
+    local HAND_SLOTS_COUNT = #HAND_SLOTS  -- 32
 
     --[[
-        POINTING (🫵):
-        Index finger (slots 13-16) stays fully extended upward.
-        All other fingers curl down hard so only index points.
-
-        Slot map:
-        1-3   = Pinky
-        4-7   = Ring
-        8-12  = Middle
-        13-16 = Index  ← the pointing finger, no bias
-        17-19 = Thumb
-        20-29 = Palm / Wrist
+        POINTING BIAS (🫵)
+        Slots 1-4   = Pinky   → curl down hard
+        Slots 5-8   = Ring    → curl down hard
+        Slots 9-13  = Middle  → curl down hard
+        Slots 14-17 = Index   → NO BIAS (stays up, pointing)
+        Slots 18-20 = Thumb   → slight tuck
+        Slots 21+   = Palm/Wrist → no change
     ]]
     local POINTING_BIAS = {
         -- Pinky curls all the way down
-        [1]=-3.5, [2]=-3.5, [3]=-3.5,
+        [1]=-5.0, [2]=-5.0, [3]=-5.0, [4]=-5.0,
         -- Ring curls down
-        [4]=-3.0, [5]=-3.0, [6]=-3.0, [7]=-3.0,
+        [5]=-4.5, [6]=-4.5, [7]=-4.5, [8]=-4.5,
         -- Middle curls down
-        [8]=-4.0, [9]=-4.0, [10]=-3.5, [11]=-2.5, [12]=-1.5,
-        -- Index stays (pointing finger) — no bias
-        -- Thumb tucks slightly
-        [17]=-0.5, [18]=-1.0, [19]=-1.0,
+        [9]=-5.5, [10]=-5.0, [11]=-4.0, [12]=-2.5, [13]=-1.2,
+        -- Index = pointing finger, NO bias
+        -- Thumb tucks slightly inward
+        [18]=-0.6, [19]=-1.2, [20]=-1.2,
     }
 
     --[[
-        PUNCHING:
-        All fingers compress slightly downward on impact.
+        PUNCH BIAS (👊)
+        All finger tips compress slightly so the hand looks like a fist
     ]]
     local PUNCH_BIAS = {
-        [1]=-0.8, [2]=-0.8, [3]=-0.8,
-        [4]=-0.8, [5]=-0.8, [6]=-0.8, [7]=-0.8,
-        [8]=-0.8, [9]=-0.8, [10]=-0.6, [11]=-0.4, [12]=-0.2,
-        [13]=-0.6,[14]=-0.6,[15]=-0.4,[16]=-0.2,
+        -- Pinky folds down
+        [1]=-3.0, [2]=-2.5, [3]=-1.5, [4]=-0.5,
+        -- Ring folds down
+        [5]=-3.0, [6]=-2.5, [7]=-1.5, [8]=-0.5,
+        -- Middle folds down
+        [9]=-3.5, [10]=-3.0, [11]=-2.0, [12]=-1.0, [13]=-0.3,
+        -- Index folds down
+        [14]=-3.0, [15]=-2.5, [16]=-1.5, [17]=-0.5,
+        -- Thumb tucks across
+        [18]=-0.8, [19]=-1.4, [20]=-1.4,
     }
 
-    local HAND_SCALE = 1.4
-    -- Local-space offsets for each hand centre (far enough to never clip avatar)
-    local HAND_RIGHT = Vector3.new( 7, 1.5, 0.5)
-    local HAND_LEFT  = Vector3.new(-7, 1.5, 0.5)
+    -- Centre positions of each hand in player local space
+    local HAND_RIGHT = Vector3.new( 9, 2, 1)
+    local HAND_LEFT  = Vector3.new(-9, 2, 1)
 
     -- ── STATE ────────────────────────────────────────────────────────────
     local controlled     = {}
@@ -108,7 +139,7 @@ local function main()
     local SNAKE_HIST_MAX = 600
     local SNAKE_GAP      = 8
 
-    -- ── NO-COLLISION (local player only) ─────────────────────────────────
+    -- ── NO-COLLISION ─────────────────────────────────────────────────────
     local function applyNoCollision(part, data)
         local char = player.Character
         if not char then return end
@@ -174,7 +205,7 @@ local function main()
     -- ── BLACK HOLE FLING ─────────────────────────────────────────────────
     local function enableFling(part, data)
         if data.bav and data.bav.Parent then
-            data.bav.MaxTorque       = Vector3.new(1e6, 1e6, 1e6)
+            data.bav.MaxTorque       = Vector3.new(1e6,1e6,1e6)
             data.bav.AngularVelocity = Vector3.new(
                 math.random(-50,50), math.random(60,100), math.random(-50,50))
         end
@@ -186,13 +217,14 @@ local function main()
             local hrp = hc:FindFirstChild("HumanoidRootPart")
             if hum and hrp then
                 local dir = (hrp.Position - part.Position).Unit
-                hrp.AssemblyLinearVelocity = (dir + Vector3.new(0,0.9,0)).Unit * 160
+                hrp.AssemblyLinearVelocity =
+                    (dir + Vector3.new(0,0.9,0)).Unit * 160
             end
         end)
     end
 
     local function disableFling(data)
-        if data.touchConn then data.touchConn:Disconnect(); data.touchConn = nil end
+        if data.touchConn then data.touchConn:Disconnect(); data.touchConn=nil end
         if data.bav and data.bav.Parent then
             data.bav.MaxTorque       = Vector3.zero
             data.bav.AngularVelocity = Vector3.zero
@@ -204,8 +236,10 @@ local function main()
         if controlled[part] then return end
         local char = player.Character
         local root = char and (
-            char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso"))
-        if root and (part.Position - root.Position).Magnitude > detectionRange then
+            char:FindFirstChild("HumanoidRootPart") or
+            char:FindFirstChild("Torso"))
+        if root and
+            (part.Position - root.Position).Magnitude > detectionRange then
             return
         end
 
@@ -243,13 +277,16 @@ local function main()
         end
     end
 
-    -- ── SNAKE CHAIN ──────────────────────────────────────────────────────
+    -- ── SNAKE ────────────────────────────────────────────────────────────
     local function getSnakeTarget(i)
-        local idx = math.clamp(i * SNAKE_GAP, 1, math.max(1, #snakeHistory))
-        return snakeHistory[idx] or snakeHistory[#snakeHistory] or Vector3.zero
+        local idx = math.clamp(
+            i * SNAKE_GAP, 1, math.max(1, #snakeHistory))
+        return snakeHistory[idx]
+            or snakeHistory[#snakeHistory]
+            or Vector3.zero
     end
 
-    -- ── STANDARD FORMATION CFrames ───────────────────────────────────────
+    -- ── STANDARD FORMATIONS ──────────────────────────────────────────────
     local function getFormationCF(mode, i, n, origin, cf, t)
         if mode == "heart" then
             local a  = ((i-1)/math.max(n,1)) * math.pi * 2
@@ -257,7 +294,9 @@ local function main()
             local hz = -(13*math.cos(a) - 5*math.cos(2*a)
                        - 2*math.cos(3*a) - math.cos(4*a))
             local s  = radius / 16
-            return CFrame.new(origin + cf:VectorToWorldSpace(Vector3.new(hx*s, 0, hz*s)))
+            return CFrame.new(
+                origin + cf:VectorToWorldSpace(
+                    Vector3.new(hx*s, 0, hz*s)))
 
         elseif mode == "rings" then
             local a = ((i-1)/math.max(n,1)) * math.pi*2 + t*1.4
@@ -275,19 +314,25 @@ local function main()
                 + cf.UpVector    * (row * 1.8 + 1))
 
         elseif mode == "box" then
-            local fV  = {cf.LookVector, -cf.LookVector,  cf.RightVector,
-                        -cf.RightVector, cf.UpVector,    -cf.UpVector}
-            local fTa = {cf.RightVector, cf.RightVector, cf.LookVector,
-                         cf.LookVector,  cf.RightVector,  cf.RightVector}
-            local fTb = {cf.UpVector,    cf.UpVector,    cf.UpVector,
-                         cf.UpVector,    cf.LookVector,   cf.LookVector}
+            local fV  = { cf.LookVector, -cf.LookVector,
+                          cf.RightVector,-cf.RightVector,
+                          cf.UpVector,   -cf.UpVector }
+            local fTa = { cf.RightVector, cf.RightVector,
+                          cf.LookVector,  cf.LookVector,
+                          cf.RightVector, cf.RightVector }
+            local fTb = { cf.UpVector,    cf.UpVector,
+                          cf.UpVector,    cf.UpVector,
+                          cf.LookVector,  cf.LookVector }
             local fi  = ((i-1) % 6) + 1
             local si  = math.floor((i-1) / 6)
             local col = (si % 2) - 0.5
             local row = math.floor(si / 2) - 0.5
             local sp  = radius * 0.45
             return CFrame.new(
-                origin + fV[fi]*radius + fTa[fi]*(col*sp) + fTb[fi]*(row*sp))
+                origin
+                + fV[fi]*radius
+                + fTa[fi]*(col*sp)
+                + fTb[fi]*(row*sp))
         end
 
         return CFrame.new(origin)
@@ -296,16 +341,15 @@ local function main()
     -- ── GASTER HAND CFrame ───────────────────────────────────────────────
     local function getGasterCF(slotIndex, sideSign, cf, gt)
         local slot = HAND_SLOTS[slotIndex]
-        if not slot then
-            return CFrame.new(0, -5000, 0)
-        end
+        if not slot then return CFrame.new(0, -5000, 0) end
 
+        -- Raw slot position scaled up so fingers are spread wide
         local sx = slot.x * HAND_SCALE
         local sy = slot.y * HAND_SCALE
 
-        -- ── FLOATING BOB (applies to ALL animations) ─────────────────────
-        -- Each hand bobs at a slightly different phase so they feel alive
-        local floatY = math.sin(gt * 2.0 + sideSign * 0.8) * 0.7
+        -- ── FLOATING BOB ─────────────────────────────────────────────────
+        -- Each hand bobs at a different phase so they feel independent
+        local floatY = math.sin(gt * 2.0 + sideSign * 1.2) * 1.0
 
         -- ── ANIMATION Y BIAS ─────────────────────────────────────────────
         if gasterAnim == "pointing" then
@@ -315,36 +359,36 @@ local function main()
         end
 
         -- ── WAVING ───────────────────────────────────────────────────────
+        -- Rock the whole hand side to side
         local waveAngle = 0
         if gasterAnim == "waving" then
-            waveAngle = math.sin(gt * 2.2) * 0.6
+            waveAngle = math.sin(gt * 2.2) * 0.5
         end
 
         -- ── PUNCHING ─────────────────────────────────────────────────────
-        -- Faster (sin*10 vs old sin*4) and longer range (7 studs vs 4.5)
+        -- Fast jab: sin * 10 = 2.5x faster than before, 8 studs range
         local punchZ = 0
         if gasterAnim == "punching" then
-            punchZ = (math.sin(gt * 10) * 0.5 + 0.5) * 7
+            punchZ = (math.sin(gt * 10) * 0.5 + 0.5) * 8
         end
 
-        -- Rotate sx around Y axis for waving
+        -- Rotate sx for waving
         local rotX = sx * math.cos(waveAngle)
         local rotZ = sx * math.sin(waveAngle)
 
-        -- Base centre (right or left hand)
+        -- Flip X for left hand so it mirrors correctly
         local base = (sideSign == 1) and HAND_RIGHT or HAND_LEFT
 
-        -- Final local-space offset — floatY added to Y
         local localOffset = Vector3.new(
             base.X + rotX * sideSign,
-            base.Y + sy + floatY,
+            base.Y + sy  + floatY,
             base.Z + rotZ - punchZ
         )
 
         return CFrame.new(cf:PointToWorldSpace(localOffset))
     end
 
-    -- ── BLACK HOLE PET TARGET ────────────────────────────────────────────
+    -- ── BLACK HOLE PET ────────────────────────────────────────────────────
     local function getBHTarget(i, cf)
         local pet = cf:PointToWorldSpace(Vector3.new(3, 1, -5))
         return pet + Vector3.new(
@@ -417,9 +461,9 @@ local function main()
         animLbl.Parent                 = panel
 
         local animList = {
-            { txt="🫵  POINTING", key="pointing", col=Color3.fromRGB(100,200,255) },
-            { txt="✋  WAVING",   key="waving",   col=Color3.fromRGB(100,255,160) },
-            { txt="👊  PUNCHING", key="punching", col=Color3.fromRGB(255,120,120) },
+            {txt="🫵  POINTING", key="pointing", col=Color3.fromRGB(100,200,255)},
+            {txt="✋  WAVING",   key="waving",   col=Color3.fromRGB(100,255,160)},
+            {txt="👊  PUNCHING", key="punching", col=Color3.fromRGB(255,120,120)},
         }
 
         for idx, anim in ipairs(animList) do
@@ -443,7 +487,8 @@ local function main()
         end
 
         -- Drag
-        local dragging, dragStartM, dragStartPos = false, Vector2.zero, UDim2.new()
+        local dragging, dragStartM, dragStartPos =
+            false, Vector2.zero, UDim2.new()
 
         tBar.InputBegan:Connect(function(inp)
             if inp.UserInputType == Enum.UserInputType.MouseButton1
@@ -467,10 +512,13 @@ local function main()
             if not dragging then return end
             if inp.UserInputType == Enum.UserInputType.MouseMovement
                 or inp.UserInputType == Enum.UserInputType.Touch then
-                local d = Vector2.new(inp.Position.X, inp.Position.Y) - dragStartM
+                local d = Vector2.new(
+                    inp.Position.X, inp.Position.Y) - dragStartM
                 panel.Position = UDim2.new(
-                    dragStartPos.X.Scale, dragStartPos.X.Offset + d.X,
-                    dragStartPos.Y.Scale, dragStartPos.Y.Offset + d.Y)
+                    dragStartPos.X.Scale,
+                    dragStartPos.X.Offset + d.X,
+                    dragStartPos.Y.Scale,
+                    dragStartPos.Y.Offset + d.Y)
             end
         end)
         UserInputService.InputEnded:Connect(function(inp)
@@ -500,13 +548,11 @@ local function main()
             local cf  = root.CFrame
             local t   = tick()
 
-            -- Snake history ring buffer
             table.insert(snakeHistory, 1, pos)
             if #snakeHistory > SNAKE_HIST_MAX then
                 table.remove(snakeHistory, SNAKE_HIST_MAX + 1)
             end
 
-            -- Mode transition handling
             if activeMode ~= lastMode then
                 if lastMode == "blackhole" then
                     for _, d in pairs(controlled) do disableFling(d) end
@@ -524,7 +570,8 @@ local function main()
                 if not CFRAME_MODES[activeMode] and CFRAME_MODES[lastMode] then
                     for _, d in pairs(controlled) do
                         if d.bp and d.bp.Parent then
-                            d.bp.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+                            d.bp.MaxForce =
+                                Vector3.new(math.huge, math.huge, math.huge)
                         end
                     end
                 end
@@ -560,14 +607,14 @@ local function main()
 
                 if activeMode == "snake" then
                     local tgt = getSnakeTarget(i)
-                    data.bp.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+                    data.bp.MaxForce = Vector3.new(math.huge,math.huge,math.huge)
                     data.bp.Position = tgt
                     data.bp.P        = pullStrength
                     data.bp.D        = pullStrength * 0.12
 
                 elseif activeMode == "blackhole" then
                     local tgt = getBHTarget(i, cf)
-                    data.bp.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+                    data.bp.MaxForce = Vector3.new(math.huge,math.huge,math.huge)
                     data.bp.Position = tgt
                     data.bp.P        = pullStrength
                     data.bp.D        = pullStrength * 0.12
@@ -585,20 +632,22 @@ local function main()
                     if i <= HAND_SLOTS_COUNT then
                         part.CFrame = getGasterCF(i, 1, cf, gasterT)
                     elseif i <= HAND_SLOTS_COUNT * 2 then
-                        part.CFrame = getGasterCF(i - HAND_SLOTS_COUNT, -1, cf, gasterT)
+                        part.CFrame = getGasterCF(
+                            i - HAND_SLOTS_COUNT, -1, cf, gasterT)
                     else
                         part.CFrame = CFrame.new(0, -5000, 0)
                     end
 
                 elseif CFRAME_MODES[activeMode] then
                     data.bp.MaxForce = Vector3.zero
-                    part.CFrame = getFormationCF(activeMode, i, n, pos, cf, t)
+                    part.CFrame =
+                        getFormationCF(activeMode, i, n, pos, cf, t)
                 end
             end
         end
     end
 
-    -- ── AUTO-SCAN LOOP ───────────────────────────────────────────────────
+    -- ── SCAN LOOP ────────────────────────────────────────────────────────
     local function scanLoop()
         while scriptAlive do
             if isActivated and activeMode ~= "none" then
@@ -697,7 +746,6 @@ local function main()
         pad.PaddingLeft   = UDim.new(0, 8)
         pad.PaddingRight  = UDim.new(0, 8)
 
-        -- ── GUI HELPERS ──────────────────────────────────────────────────
         local function sLabel(txt, order)
             local l = Instance.new("TextLabel")
             l.Text                   = txt
@@ -774,7 +822,7 @@ local function main()
             return tb
         end
 
-        -- ── STATUS ───────────────────────────────────────────────────────
+        -- STATUS
         sLabel("STATUS", 1)
 
         local statusLbl = Instance.new("TextLabel")
@@ -808,7 +856,7 @@ local function main()
             end
         end)
 
-        -- ── STANDARD MODES ───────────────────────────────────────────────
+        -- STANDARD MODES
         sLabel("STANDARD MODES", 4)
 
         local stdRows  = 3
@@ -826,12 +874,12 @@ local function main()
         stdGL.SortOrder           = Enum.SortOrder.LayoutOrder
 
         local stdModes = {
-            { txt="SNAKE",      mode="snake",     col=Color3.fromRGB(160,110,255) },
-            { txt="HEART",      mode="heart",     col=Color3.fromRGB(255,100,150) },
-            { txt="RINGS",      mode="rings",     col=Color3.fromRGB(80, 210,255) },
-            { txt="WALL",       mode="wall",      col=Color3.fromRGB(255,200, 90) },
-            { txt="BOX CAGE",   mode="box",       col=Color3.fromRGB(160,255,100) },
-            { txt="BLACK HOLE", mode="blackhole", col=Color3.fromRGB(220,220,220) },
+            {txt="SNAKE",      mode="snake",     col=Color3.fromRGB(160,110,255)},
+            {txt="HEART",      mode="heart",     col=Color3.fromRGB(255,100,150)},
+            {txt="RINGS",      mode="rings",     col=Color3.fromRGB(80, 210,255)},
+            {txt="WALL",       mode="wall",      col=Color3.fromRGB(255,200, 90)},
+            {txt="BOX CAGE",   mode="box",       col=Color3.fromRGB(160,255,100)},
+            {txt="BLACK HOLE", mode="blackhole", col=Color3.fromRGB(220,220,220)},
         }
 
         for idx, m in ipairs(stdModes) do
@@ -857,7 +905,8 @@ local function main()
                 else
                     for _, d in pairs(controlled) do
                         if d.bp and d.bp.Parent then
-                            d.bp.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+                            d.bp.MaxForce =
+                                Vector3.new(math.huge,math.huge,math.huge)
                         end
                     end
                 end
@@ -868,7 +917,7 @@ local function main()
             end)
         end
 
-        -- ── SPECIAL MODES ────────────────────────────────────────────────
+        -- SPECIAL MODES
         sLabel("SPECIAL MODES", 6)
 
         local spGridH = 36
@@ -885,8 +934,10 @@ local function main()
         spGL.SortOrder           = Enum.SortOrder.LayoutOrder
 
         local specialModes = {
-            { txt="GASTER HAND",    mode="gasterhand",   col=Color3.fromRGB(180, 80,255) },
-            { txt="2 GASTER HANDS", mode="gaster2hands", col=Color3.fromRGB(220,110,255) },
+            {txt="GASTER HAND",    mode="gasterhand",
+             col=Color3.fromRGB(180, 80,255)},
+            {txt="2 GASTER HANDS", mode="gaster2hands",
+             col=Color3.fromRGB(220,110,255)},
         }
 
         for idx, m in ipairs(specialModes) do
@@ -918,12 +969,15 @@ local function main()
             end)
         end
 
-        -- ── SETTINGS ─────────────────────────────────────────────────────
+        -- SETTINGS
         sLabel("SETTINGS", 8)
 
-        local pullTB  = makeSettingRow("PULL STRENGTH",  1500, "snake + blackhole speed", 9)
-        local radTB   = makeSettingRow("RADIUS (studs)", 7,    "formation spread size",   10)
-        local rangeTB = makeSettingRow("DETECT RANGE",   9999, "studs (9999 = full map)", 11)
+        local pullTB  = makeSettingRow(
+            "PULL STRENGTH",  1500, "snake + blackhole speed", 9)
+        local radTB   = makeSettingRow(
+            "RADIUS (studs)", 7,    "formation spread size",   10)
+        local rangeTB = makeSettingRow(
+            "DETECT RANGE",   9999, "studs (9999 = full map)", 11)
 
         pullTB.FocusLost:Connect(function()
             local v = tonumber(pullTB.Text:match("^%s*(.-)%s*$"))
@@ -943,30 +997,36 @@ local function main()
 
         radTB.FocusLost:Connect(function()
             local v = tonumber(radTB.Text:match("^%s*(.-)%s*$"))
-            if v and v > 0 then radius = v; radTB.Text = tostring(v)
-            else radTB.Text = tostring(radius) end
+            if v and v > 0 then
+                radius = v
+                radTB.Text = tostring(v)
+            else
+                radTB.Text = tostring(radius)
+            end
         end)
 
         rangeTB.FocusLost:Connect(function()
             local v = tonumber(rangeTB.Text:match("^%s*(.-)%s*$"))
-            if v and v > 0 then detectionRange = v; rangeTB.Text = tostring(v)
-            else rangeTB.Text = tostring(detectionRange) end
+            if v and v > 0 then
+                detectionRange = v
+                rangeTB.Text = tostring(v)
+            else
+                rangeTB.Text = tostring(detectionRange)
+            end
         end)
 
-        -- ── ACTIONS ──────────────────────────────────────────────────────
+        -- ACTIONS
         sLabel("ACTIONS", 12)
 
         local scanBtn = makeSingleBtn(
             "SCAN PARTS",
-            Color3.fromRGB(18, 60, 22), Color3.fromRGB(80, 255, 120), 13)
-
+            Color3.fromRGB(18,60,22), Color3.fromRGB(80,255,120), 13)
         local releaseBtn = makeSingleBtn(
             "RELEASE ALL",
-            Color3.fromRGB(60, 32, 8), Color3.fromRGB(255, 155, 55), 14)
-
+            Color3.fromRGB(60,32,8),  Color3.fromRGB(255,155,55), 14)
         local deactivateBtn = makeSingleBtn(
             "DEACTIVATE",
-            Color3.fromRGB(75, 8, 8), Color3.fromRGB(255, 55, 55), 15)
+            Color3.fromRGB(75,8,8),   Color3.fromRGB(255,55,55),  15)
 
         scanBtn.MouseButton1Click:Connect(function()
             sweepMap()
@@ -988,7 +1048,8 @@ local function main()
             activeMode  = "none"
             scriptAlive = false
             gui:Destroy()
-            local icon = pg:FindFirstChild("ManipIcon")
+            local icon = pg:FindFirstChild("Manip
+Icon")
             if icon then icon:Destroy() end
             print("Deactivated.")
         end)
@@ -1004,7 +1065,6 @@ local function main()
             miniGui.Parent       = pg
 
             local ib = Instance.new("TextButton")
-            ib.
             ib.Text             = "M"
             ib.Size             = UDim2.fromOffset(44, 44)
             ib.Position         = UDim2.new(1, -54, 0, 10)
