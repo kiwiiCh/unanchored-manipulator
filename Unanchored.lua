@@ -27,34 +27,72 @@ local function main()
 
     -- ── GASTER HAND SLOT TABLE ───────────────────────────────────────────
     --[[
-        19 slots that form a hand with a hollow centre (the hole).
-        x = horizontal column, y = vertical row.
-        Scale: each unit = HAND_SCALE studs.
+        30 slots shaped like ✋
+        Fingers point UPWARD, thumb offset to the right
 
-              col: -2  -1   0   1   2
-        row  4:        [F]     [F]
-        row  3:   [K] [P] [P] [P] [K]
-        row  2:   [P]           [P]
-        row  1:   [P]           [P]
-        row  0:   [K] [P] [P] [P] [K]
-        row -1:       [W] [W] [W]
+              col: -2  -1   0   1        3
+        row 6:          [M]
+        row 5:     [R] [M] [I]
+        row 4: [Pi][R] [M] [I]
+        row 3: [Pi][R] [M] [I]           [T]
+        row 2: [Pi][P] [P] [P]           [T]
+        row 1: [Pa][Pa][Pa][Pa]          [T]
+        row 0: [Pa][Pa][Pa][Pa][Pa]
+        row-1:     [W] [W] [W]
     ]]
     local HAND_SLOTS = {
-        {x=-1,y=4},{x=1,y=4},
-        {x=-2,y=3},{x=-1,y=3},{x=0,y=3},{x=1,y=3},{x=2,y=3},
-        {x=-2,y=2},{x=2,y=2},
-        {x=-2,y=1},{x=2,y=1},
-        {x=-2,y=0},{x=-1,y=0},{x=0,y=0},{x=1,y=0},{x=2,y=0},
-        {x=-1,y=-1},{x=0,y=-1},{x=1,y=-1},
+        -- PINKY (col -2, rows 2-4)
+        {x=-2, y=4}, {x=-2, y=3}, {x=-2, y=2},
+        -- RING (col -1, rows 2-5)
+        {x=-1, y=5}, {x=-1, y=4}, {x=-1, y=3}, {x=-1, y=2},
+        -- MIDDLE (col 0, rows 2-6) tallest finger
+        {x=0,  y=6}, {x=0,  y=5}, {x=0,  y=4}, {x=0,  y=3}, {x=0,  y=2},
+        -- INDEX (col 1, rows 2-5)
+        {x=1,  y=5}, {x=1,  y=4}, {x=1,  y=3}, {x=1,  y=2},
+        -- THUMB (col 3, offset right and lower)
+        {x=3,  y=3}, {x=3,  y=2}, {x=3,  y=1},
+        -- PALM (rows 0-1)
+        {x=-2, y=1}, {x=-1, y=1}, {x=0,  y=1}, {x=1,  y=1},
+        {x=-2, y=0}, {x=-1, y=0}, {x=0,  y=0}, {x=1,  y=0}, {x=2,  y=0},
+        -- WRIST (row -1)
+        {x=-1, y=-1}, {x=0, y=-1}, {x=1,  y=-1},
     }
-    local HAND_SLOTS_COUNT = #HAND_SLOTS  -- 19
+    local HAND_SLOTS_COUNT = #HAND_SLOTS  -- 30
 
-    -- Per-slot Y bias for POINTING (left finger up, right finger tucked)
-    local POINTING_BIAS = { [1]=1.2, [2]=-0.5 }
-    -- Per-slot Y bias for PUNCHING (fingers fold down)
-    local PUNCH_BIAS    = {
-        [1]=-1.5,[2]=-1.5,
-        [3]=-0.4,[4]=-0.4,[5]=-0.4,[6]=-0.4,[7]=-0.4
+    --[[
+        POINTING (🫵):
+        Index finger (slots 13-16) stays fully extended upward.
+        All other fingers curl down hard so only index points.
+
+        Slot map:
+        1-3   = Pinky
+        4-7   = Ring
+        8-12  = Middle
+        13-16 = Index  ← the pointing finger, no bias
+        17-19 = Thumb
+        20-29 = Palm / Wrist
+    ]]
+    local POINTING_BIAS = {
+        -- Pinky curls all the way down
+        [1]=-3.5, [2]=-3.5, [3]=-3.5,
+        -- Ring curls down
+        [4]=-3.0, [5]=-3.0, [6]=-3.0, [7]=-3.0,
+        -- Middle curls down
+        [8]=-4.0, [9]=-4.0, [10]=-3.5, [11]=-2.5, [12]=-1.5,
+        -- Index stays (pointing finger) — no bias
+        -- Thumb tucks slightly
+        [17]=-0.5, [18]=-1.0, [19]=-1.0,
+    }
+
+    --[[
+        PUNCHING:
+        All fingers compress slightly downward on impact.
+    ]]
+    local PUNCH_BIAS = {
+        [1]=-0.8, [2]=-0.8, [3]=-0.8,
+        [4]=-0.8, [5]=-0.8, [6]=-0.8, [7]=-0.8,
+        [8]=-0.8, [9]=-0.8, [10]=-0.6, [11]=-0.4, [12]=-0.2,
+        [13]=-0.6,[14]=-0.6,[15]=-0.4,[16]=-0.2,
     }
 
     local HAND_SCALE = 1.4
@@ -63,12 +101,12 @@ local function main()
     local HAND_LEFT  = Vector3.new(-7, 1.5, 0.5)
 
     -- ── STATE ────────────────────────────────────────────────────────────
-    local controlled    = {}
-    local partCount     = 0
-    local snakeT        = 0
-    local snakeHistory  = {}
-    local SNAKE_HIST_MAX= 600
-    local SNAKE_GAP     = 8
+    local controlled     = {}
+    local partCount      = 0
+    local snakeT         = 0
+    local snakeHistory   = {}
+    local SNAKE_HIST_MAX = 600
+    local SNAKE_GAP      = 8
 
     -- ── NO-COLLISION (local player only) ─────────────────────────────────
     local function applyNoCollision(part, data)
@@ -136,7 +174,7 @@ local function main()
     -- ── BLACK HOLE FLING ─────────────────────────────────────────────────
     local function enableFling(part, data)
         if data.bav and data.bav.Parent then
-            data.bav.MaxTorque       = Vector3.new(1e6,1e6,1e6)
+            data.bav.MaxTorque       = Vector3.new(1e6, 1e6, 1e6)
             data.bav.AngularVelocity = Vector3.new(
                 math.random(-50,50), math.random(60,100), math.random(-50,50))
         end
@@ -193,7 +231,7 @@ local function main()
         applyNoCollision(part, data)
 
         if CFRAME_MODES[activeMode] then bp.MaxForce = Vector3.zero end
-        if activeMode == "blackhole"  then enableFling(part, data) end
+        if activeMode == "blackhole" then enableFling(part, data) end
 
         controlled[part] = data
         partCount = partCount + 1
@@ -237,12 +275,12 @@ local function main()
                 + cf.UpVector    * (row * 1.8 + 1))
 
         elseif mode == "box" then
-            local fV  = {cf.LookVector,-cf.LookVector,cf.RightVector,
-                         -cf.RightVector,cf.UpVector,-cf.UpVector}
-            local fTa = {cf.RightVector,cf.RightVector,cf.LookVector,
-                         cf.LookVector,cf.RightVector,cf.RightVector}
-            local fTb = {cf.UpVector,cf.UpVector,cf.UpVector,
-                         cf.UpVector,cf.LookVector,cf.LookVector}
+            local fV  = {cf.LookVector, -cf.LookVector,  cf.RightVector,
+                        -cf.RightVector, cf.UpVector,    -cf.UpVector}
+            local fTa = {cf.RightVector, cf.RightVector, cf.LookVector,
+                         cf.LookVector,  cf.RightVector,  cf.RightVector}
+            local fTb = {cf.UpVector,    cf.UpVector,    cf.UpVector,
+                         cf.UpVector,    cf.LookVector,   cf.LookVector}
             local fi  = ((i-1) % 6) + 1
             local si  = math.floor((i-1) / 6)
             local col = (si % 2) - 0.5
@@ -256,12 +294,6 @@ local function main()
     end
 
     -- ── GASTER HAND CFrame ───────────────────────────────────────────────
-    --[[
-        slotIndex : 1-based index into HAND_SLOTS (1..19)
-        sideSign  :  1 = right hand,  -1 = left hand
-        cf        : player root CFrame
-        gt        : gaster animation timer
-    ]]
     local function getGasterCF(slotIndex, sideSign, cf, gt)
         local slot = HAND_SLOTS[slotIndex]
         if not slot then
@@ -271,36 +303,41 @@ local function main()
         local sx = slot.x * HAND_SCALE
         local sy = slot.y * HAND_SCALE
 
-        -- Apply animation Y bias
+        -- ── FLOATING BOB (applies to ALL animations) ─────────────────────
+        -- Each hand bobs at a slightly different phase so they feel alive
+        local floatY = math.sin(gt * 2.0 + sideSign * 0.8) * 0.7
+
+        -- ── ANIMATION Y BIAS ─────────────────────────────────────────────
         if gasterAnim == "pointing" then
             sy = sy + (POINTING_BIAS[slotIndex] or 0) * HAND_SCALE
         elseif gasterAnim == "punching" then
             sy = sy + (PUNCH_BIAS[slotIndex] or 0) * HAND_SCALE
         end
 
-        -- Waving: rotate slot X around the hand centre Y axis
+        -- ── WAVING ───────────────────────────────────────────────────────
         local waveAngle = 0
         if gasterAnim == "waving" then
             waveAngle = math.sin(gt * 2.2) * 0.6
         end
 
-        -- Punching: pulse hand forward (0 to 4.5 studs)
+        -- ── PUNCHING ─────────────────────────────────────────────────────
+        -- Faster (sin*10 vs old sin*4) and longer range (7 studs vs 4.5)
         local punchZ = 0
         if gasterAnim == "punching" then
-            punchZ = (math.sin(gt * 4) * 0.5 + 0.5) * 4.5
+            punchZ = (math.sin(gt * 10) * 0.5 + 0.5) * 7
         end
 
-        -- Rotate sx around Y for waving
+        -- Rotate sx around Y axis for waving
         local rotX = sx * math.cos(waveAngle)
         local rotZ = sx * math.sin(waveAngle)
 
-        -- Base centre in local space (flipped for left hand)
+        -- Base centre (right or left hand)
         local base = (sideSign == 1) and HAND_RIGHT or HAND_LEFT
 
-        -- Compose local offset using the player's own axes
+        -- Final local-space offset — floatY added to Y
         local localOffset = Vector3.new(
             base.X + rotX * sideSign,
-            base.Y + sy,
+            base.Y + sy + floatY,
             base.Z + rotZ - punchZ
         )
 
@@ -348,7 +385,6 @@ local function main()
         ps.Color     = Color3.fromRGB(180, 60, 255)
         ps.Thickness = 1.5
 
-        -- Title bar / drag handle
         local tBar = Instance.new("Frame")
         tBar.Size             = UDim2.new(1, 0, 0, 36)
         tBar.BackgroundColor3 = Color3.fromRGB(20, 8, 45)
@@ -358,32 +394,32 @@ local function main()
         Instance.new("UICorner", tBar).CornerRadius = UDim.new(0, 8)
 
         local tLbl = Instance.new("TextLabel")
-        tLbl.Text             = "GASTER HAND FORM"
-        tLbl.Size             = UDim2.new(1, -10, 1, 0)
-        tLbl.Position         = UDim2.fromOffset(8, 0)
+        tLbl.Text                   = "GASTER HAND FORM"
+        tLbl.Size                   = UDim2.new(1, -10, 1, 0)
+        tLbl.Position               = UDim2.fromOffset(8, 0)
         tLbl.BackgroundTransparency = 1
-        tLbl.TextColor3       = Color3.fromRGB(200, 120, 255)
-        tLbl.TextSize         = 12
-        tLbl.Font             = Enum.Font.GothamBold
-        tLbl.TextXAlignment   = Enum.TextXAlignment.Left
-        tLbl.ZIndex           = 10
-        tLbl.Parent           = tBar
+        tLbl.TextColor3             = Color3.fromRGB(200, 120, 255)
+        tLbl.TextSize               = 12
+        tLbl.Font                   = Enum.Font.GothamBold
+        tLbl.TextXAlignment         = Enum.TextXAlignment.Left
+        tLbl.ZIndex                 = 10
+        tLbl.Parent                 = tBar
 
         local animLbl = Instance.new("TextLabel")
-        animLbl.Text           = "FORM: " .. gasterAnim:upper()
-        animLbl.Size           = UDim2.new(1, -16, 0, 18)
-        animLbl.Position       = UDim2.fromOffset(8, 42)
+        animLbl.Text                   = "FORM: " .. gasterAnim:upper()
+        animLbl.Size                   = UDim2.new(1, -16, 0, 18)
+        animLbl.Position               = UDim2.fromOffset(8, 42)
         animLbl.BackgroundTransparency = 1
-        animLbl.TextColor3     = Color3.fromRGB(130, 130, 255)
-        animLbl.TextSize       = 11
-        animLbl.Font           = Enum.Font.GothamBold
-        animLbl.TextXAlignment = Enum.TextXAlignment.Left
-        animLbl.Parent         = panel
+        animLbl.TextColor3             = Color3.fromRGB(130, 130, 255)
+        animLbl.TextSize               = 11
+        animLbl.Font                   = Enum.Font.GothamBold
+        animLbl.TextXAlignment         = Enum.TextXAlignment.Left
+        animLbl.Parent                 = panel
 
         local animList = {
-            { txt="POINTING", key="pointing", col=Color3.fromRGB(100,200,255) },
-            { txt="WAVING",   key="waving",   col=Color3.fromRGB(100,255,160) },
-            { txt="PUNCHING", key="punching", col=Color3.fromRGB(255,120,120) },
+            { txt="🫵  POINTING", key="pointing", col=Color3.fromRGB(100,200,255) },
+            { txt="✋  WAVING",   key="waving",   col=Color3.fromRGB(100,255,160) },
+            { txt="👊  PUNCHING", key="punching", col=Color3.fromRGB(255,120,120) },
         }
 
         for idx, anim in ipairs(animList) do
@@ -400,9 +436,9 @@ local function main()
             Instance.new("UICorner", btn)
 
             btn.MouseButton1Click:Connect(function()
-                gasterAnim    = anim.key
-                gasterT       = 0
-                animLbl.Text  = "FORM: " .. anim.key:upper()
+                gasterAnim   = anim.key
+                gasterT      = 0
+                animLbl.Text = "FORM: " .. anim.key:upper()
             end)
         end
 
@@ -492,7 +528,6 @@ local function main()
                         end
                     end
                 end
-                -- Gaster sub-GUI visibility
                 if GASTER_MODES[activeMode] then
                     createGasterGui()
                 else
@@ -505,7 +540,6 @@ local function main()
                 continue
             end
 
-            -- Build ordered array from dictionary
             local arr = {}
             for part, data in pairs(controlled) do
                 if part.Parent and data.bp and data.bp.Parent then
@@ -539,11 +573,6 @@ local function main()
                     data.bp.D        = pullStrength * 0.12
 
                 elseif activeMode == "gasterhand" then
-                    --[[
-                        Single right hand.
-                        Slots 1-19 → right hand.
-                        Any extra blocks → parked at Y=-5000.
-                    ]]
                     data.bp.MaxForce = Vector3.zero
                     if i <= HAND_SLOTS_COUNT then
                         part.CFrame = getGasterCF(i, 1, cf, gasterT)
@@ -552,12 +581,6 @@ local function main()
                     end
 
                 elseif activeMode == "gaster2hands" then
-                    --[[
-                        Two hands:
-                        Blocks  1-19  → right hand (sideSign =  1)
-                        Blocks 20-38  → left  hand (sideSign = -1)
-                        Blocks 39+    → parked
-                    ]]
                     data.bp.MaxForce = Vector3.zero
                     if i <= HAND_SLOTS_COUNT then
                         part.CFrame = getGasterCF(i, 1, cf, gasterT)
@@ -607,19 +630,18 @@ local function main()
 
         local W, H = 320, 570
         local panel = Instance.new("Frame")
-        panel.Name               = "Panel"
-        panel.Size               = UDim2.fromOffset(W, H)
-        panel.Position           = UDim2.new(0.5, -W/2, 0.5, -H/2)
-        panel.BackgroundColor3   = Color3.fromRGB(10, 10, 25)
-        panel.BorderSizePixel    = 0
-        panel.ClipsDescendants   = true
-        panel.Parent             = gui
+        panel.Name             = "Panel"
+        panel.Size             = UDim2.fromOffset(W, H)
+        panel.Position         = UDim2.new(0.5, -W/2, 0.5, -H/2)
+        panel.BackgroundColor3 = Color3.fromRGB(10, 10, 25)
+        panel.BorderSizePixel  = 0
+        panel.ClipsDescendants = true
+        panel.Parent           = gui
         Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 8)
         local pStroke = Instance.new("UIStroke", panel)
         pStroke.Color     = Color3.fromRGB(90, 40, 180)
         pStroke.Thickness = 1.5
 
-        -- Title bar
         local titleBar = Instance.new("Frame")
         titleBar.Size             = UDim2.new(1, 0, 0, 40)
         titleBar.BackgroundColor3 = Color3.fromRGB(20, 10, 48)
@@ -629,16 +651,16 @@ local function main()
         Instance.new("UICorner", titleBar).CornerRadius = UDim.new(0, 8)
 
         local titleTxt = Instance.new("TextLabel")
-        titleTxt.Text             = "MANIPULATOR KII"
-        titleTxt.Size             = UDim2.new(1, -80, 1, 0)
-        titleTxt.Position         = UDim2.fromOffset(10, 0)
+        titleTxt.Text                   = "MANIPULATOR KII"
+        titleTxt.Size                   = UDim2.new(1, -80, 1, 0)
+        titleTxt.Position               = UDim2.fromOffset(10, 0)
         titleTxt.BackgroundTransparency = 1
-        titleTxt.TextColor3       = Color3.fromRGB(195, 140, 255)
-        titleTxt.TextSize         = 14
-        titleTxt.Font             = Enum.Font.GothamBold
-        titleTxt.TextXAlignment   = Enum.TextXAlignment.Left
-        titleTxt.ZIndex           = 10
-        titleTxt.Parent           = titleBar
+        titleTxt.TextColor3             = Color3.fromRGB(195, 140, 255)
+        titleTxt.TextSize               = 14
+        titleTxt.Font                   = Enum.Font.GothamBold
+        titleTxt.TextXAlignment         = Enum.TextXAlignment.Left
+        titleTxt.ZIndex                 = 10
+        titleTxt.Parent                 = titleBar
 
         local closeBtn = Instance.new("TextButton")
         closeBtn.Text             = "X"
@@ -653,7 +675,6 @@ local function main()
         closeBtn.Parent           = titleBar
         Instance.new("UICorner", closeBtn)
 
-        -- Scroll area
         local scroll = Instance.new("ScrollingFrame")
         scroll.Size                   = UDim2.new(1, 0, 1, -40)
         scroll.Position               = UDim2.fromOffset(0, 40)
@@ -679,15 +700,15 @@ local function main()
         -- ── GUI HELPERS ──────────────────────────────────────────────────
         local function sLabel(txt, order)
             local l = Instance.new("TextLabel")
-            l.Text             = txt
-            l.Size             = UDim2.new(1, 0, 0, 20)
+            l.Text                   = txt
+            l.Size                   = UDim2.new(1, 0, 0, 20)
             l.BackgroundTransparency = 1
-            l.TextColor3       = Color3.fromRGB(180, 130, 255)
-            l.TextSize         = 12
-            l.Font             = Enum.Font.GothamBold
-            l.TextXAlignment   = Enum.TextXAlignment.Left
-            l.LayoutOrder      = order
-            l.Parent           = scroll
+            l.TextColor3             = Color3.fromRGB(180, 130, 255)
+            l.TextSize               = 12
+            l.Font                   = Enum.Font.GothamBold
+            l.TextXAlignment         = Enum.TextXAlignment.Left
+            l.LayoutOrder            = order
+            l.Parent                 = scroll
         end
 
         local function makeSingleBtn(txt, bgCol, txtCol, order)
@@ -715,16 +736,16 @@ local function main()
             Instance.new("UICorner", row)
 
             local lbl = Instance.new("TextLabel")
-            lbl.Text            = labelTxt
-            lbl.Size            = UDim2.new(0.55, 0, 0, 22)
-            lbl.Position        = UDim2.fromOffset(8, 4)
+            lbl.Text                   = labelTxt
+            lbl.Size                   = UDim2.new(0.55, 0, 0, 22)
+            lbl.Position               = UDim2.fromOffset(8, 4)
             lbl.BackgroundTransparency = 1
-            lbl.TextColor3      = Color3.fromRGB(155, 155, 255)
-            lbl.TextSize        = 11
-            lbl.Font            = Enum.Font.GothamBold
-            lbl.TextXAlignment  = Enum.TextXAlignment.Left
-            lbl.TextWrapped     = true
-            lbl.Parent          = row
+            lbl.TextColor3             = Color3.fromRGB(155, 155, 255)
+            lbl.TextSize               = 11
+            lbl.Font                   = Enum.Font.GothamBold
+            lbl.TextXAlignment         = Enum.TextXAlignment.Left
+            lbl.TextWrapped            = true
+            lbl.Parent                 = row
 
             local tb = Instance.new("TextBox")
             tb.Text             = tostring(default)
@@ -740,63 +761,43 @@ local function main()
             Instance.new("UICorner", tb)
 
             local hintLbl = Instance.new("TextLabel")
-            hintLbl.Text           = hint
-            hintLbl.Size           = UDim2.new(1, -8, 0, 14)
-            hintLbl.Position       = UDim2.fromOffset(8, 27)
+            hintLbl.Text                   = hint
+            hintLbl.Size                   = UDim2.new(1, -8, 0, 14)
+            hintLbl.Position               = UDim2.fromOffset(8, 27)
             hintLbl.BackgroundTransparency = 1
-            hintLbl.TextColor3     = Color3.fromRGB(80, 80, 130)
-            hintLbl.TextSize       = 9
-            hintLbl.Font           = Enum.Font.Gotham
-            hintLbl.TextXAlignment = Enum.TextXAlignment.Left
-            hintLbl.Parent         = row
+            hintLbl.TextColor3             = Color3.fromRGB(80, 80, 130)
+            hintLbl.TextSize               = 9
+            hintLbl.Font                   = Enum.Font.Gotham
+            hintLbl.TextXAlignment         = Enum.TextXAlignment.Left
+            hintLbl.Parent                 = row
 
             return tb
-        end
-
-        -- Helper to build a 2-column mode grid
-        local function makeModeGrid(modeList, order, bgCol, strokeCol)
-            local rows  = math.ceil(#modeList / 2)
-            local gridH = rows * 36 + math.max(0, rows-1) * 4
-
-            local frame = Instance.new("Frame")
-            frame.Size             = UDim2.new(1, 0, 0, gridH)
-            frame.BackgroundTransparency = 1
-            frame.LayoutOrder      = order
-            frame.Parent           = scroll
-
-            local gl = Instance.new("UIGridLayout", frame)
-            gl.CellSize            = UDim2.new(0.5, -3, 0, 36)
-            gl.CellPadding         = UDim2.fromOffset(4, 4)
-            gl.HorizontalAlignment = Enum.HorizontalAlignment.Left
-            gl.SortOrder           = Enum.SortOrder.LayoutOrder
-
-            return frame
         end
 
         -- ── STATUS ───────────────────────────────────────────────────────
         sLabel("STATUS", 1)
 
         local statusLbl = Instance.new("TextLabel")
-        statusLbl.Text            = "IDLE  |  PARTS: 0"
-        statusLbl.Size            = UDim2.new(1, 0, 0, 22)
+        statusLbl.Text                   = "IDLE  |  PARTS: 0"
+        statusLbl.Size                   = UDim2.new(1, 0, 0, 22)
         statusLbl.BackgroundTransparency = 1
-        statusLbl.TextColor3      = Color3.fromRGB(80, 255, 140)
-        statusLbl.TextSize        = 12
-        statusLbl.Font            = Enum.Font.GothamBold
-        statusLbl.TextXAlignment  = Enum.TextXAlignment.Left
-        statusLbl.LayoutOrder     = 2
-        statusLbl.Parent          = scroll
+        statusLbl.TextColor3             = Color3.fromRGB(80, 255, 140)
+        statusLbl.TextSize               = 12
+        statusLbl.Font                   = Enum.Font.GothamBold
+        statusLbl.TextXAlignment         = Enum.TextXAlignment.Left
+        statusLbl.LayoutOrder            = 2
+        statusLbl.Parent                 = scroll
 
         local modeLbl = Instance.new("TextLabel")
-        modeLbl.Text            = "MODE: NONE"
-        modeLbl.Size            = UDim2.new(1, 0, 0, 18)
+        modeLbl.Text                   = "MODE: NONE"
+        modeLbl.Size                   = UDim2.new(1, 0, 0, 18)
         modeLbl.BackgroundTransparency = 1
-        modeLbl.TextColor3      = Color3.fromRGB(130, 130, 255)
-        modeLbl.TextSize        = 11
-        modeLbl.Font            = Enum.Font.GothamBold
-        modeLbl.TextXAlignment  = Enum.TextXAlignment.Left
-        modeLbl.LayoutOrder     = 3
-        modeLbl.Parent          = scroll
+        modeLbl.TextColor3             = Color3.fromRGB(130, 130, 255)
+        modeLbl.TextSize               = 11
+        modeLbl.Font                   = Enum.Font.GothamBold
+        modeLbl.TextXAlignment         = Enum.TextXAlignment.Left
+        modeLbl.LayoutOrder            = 3
+        modeLbl.Parent                 = scroll
 
         task.spawn(function()
             while panel.Parent and scriptAlive do
@@ -813,10 +814,10 @@ local function main()
         local stdRows  = 3
         local stdGridH = stdRows * 36 + (stdRows-1) * 4
         local stdFrame = Instance.new("Frame")
-        stdFrame.Size             = UDim2.new(1, 0, 0, stdGridH)
+        stdFrame.Size                   = UDim2.new(1, 0, 0, stdGridH)
         stdFrame.BackgroundTransparency = 1
-        stdFrame.LayoutOrder      = 5
-        stdFrame.Parent           = scroll
+        stdFrame.LayoutOrder            = 5
+        stdFrame.Parent                 = scroll
 
         local stdGL = Instance.new("UIGridLayout", stdFrame)
         stdGL.CellSize            = UDim2.new(0.5, -3, 0, 36)
@@ -846,11 +847,7 @@ local function main()
             Instance.new("UICorner", btn)
 
             btn.MouseButton1Click:Connect(function()
-                -- Leaving a Gaster mode
-                if GASTER_MODES[activeMode] then
-                    destroyGasterGui()
-                end
-                -- MaxForce management
+                if GASTER_MODES[activeMode] then destroyGasterGui() end
                 if CFRAME_MODES[m.mode] then
                     for _, d in pairs(controlled) do
                         if d.bp and d.bp.Parent then
@@ -876,10 +873,10 @@ local function main()
 
         local spGridH = 36
         local spFrame = Instance.new("Frame")
-        spFrame.Size             = UDim2.new(1, 0, 0, spGridH)
+        spFrame.Size                   = UDim2.new(1, 0, 0, spGridH)
         spFrame.BackgroundTransparency = 1
-        spFrame.LayoutOrder      = 7
-        spFrame.Parent           = scroll
+        spFrame.LayoutOrder            = 7
+        spFrame.Parent                 = scroll
 
         local spGL = Instance.new("UIGridLayout", spFrame)
         spGL.CellSize            = UDim2.new(0.5, -3, 0, 36)
@@ -1007,6 +1004,7 @@ local function main()
             miniGui.Parent       = pg
 
             local ib = Instance.new("TextButton")
+            ib.
             ib.Text             = "M"
             ib.Size             = UDim2.fromOffset(44, 44)
             ib.Position         = UDim2.new(1, -54, 0, 10)
@@ -1024,7 +1022,6 @@ local function main()
             ib.MouseButton1Click:Connect(function()
                 miniGui:Destroy()
                 createGUI()
-                -- If still in a Gaster mode, reopen its sub-GUI
                 if GASTER_MODES[activeMode] then
                     createGasterGui()
                 end
