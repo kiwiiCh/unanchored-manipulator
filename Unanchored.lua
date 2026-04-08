@@ -792,7 +792,7 @@ local function main()
             for _, sp in ipairs(sbSpheres) do
                 if sp.selected then return sp.mode end
             end
-            return "none"   -- FIX: was an unclosed string literal
+            return "orbit"   -- Default to orbit if none selected
         end
 
         -- Mode state label
@@ -917,7 +917,6 @@ local function main()
         splitStroke.Color     = Color3.fromRGB(0, 180, 255)
         splitStroke.Thickness = 1.2
 
-        splitBtn.MouseButton1Click:Connect(function()
         splitBtn.MouseButton1Click:Connect(function()
             local char = player.Character
             local root = char and (
