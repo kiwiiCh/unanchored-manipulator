@@ -280,26 +280,52 @@ local function main()
     end
 
     -- ── Part grab / release ───────────────────────────────────
+    -- BodyPosition + BodyGyro are physics constraints that run inside
+    -- the server physics step, so ALL players see movement live with no
+    -- delay. Direct CFrame only updates client-side in FE games — the
+    -- server rubber-bands it back and other players see the old position.
     local function grabPart(part)
         if controlled[part] then return end
         if not isValid(part) then return end
         local char = player.Character
         local root = char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso"))
         if root and (part.Position - root.Position).Magnitude > detectionRange then return end
-        local origCC = part.CanCollide
-        pcall(function()
-            part.CanCollide = false
-            part:SetNetworkOwner(player)
-        end)
-        controlled[part] = { origCC = origCC }
+
+        local origCC   = part.CanCollide
+        local origAnch = part.Anchored
+
+        pcall(function() part.CanCollide = false end)
+
+        -- BodyPosition: holds XYZ position against gravity + physics forces
+        local bp = Instance.new("BodyPosition")
+        bp.MaxForce = Vector3.new(1e9, 1e9, 1e9)
+        bp.P        = 50000   -- high stiffness = snaps to target instantly
+        bp.D        = 2500    -- damping = no bounce/oscillation
+        bp.Position = part.Position
+        bp.Parent   = part    -- parent inside the workspace part → replicates to server
+
+        -- BodyGyro: holds rotation
+        local bg = Instance.new("BodyGyro")
+        bg.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
+        bg.P         = 50000
+        bg.D         = 2500
+        bg.CFrame    = part.CFrame
+        bg.Parent    = part
+
+        controlled[part] = { origCC = origCC, origAnch = origAnch, bp = bp, bg = bg }
         partCount = partCount + 1
     end
 
     local function releasePart(part, data)
+        -- Destroy movers before restoring state so physics doesn't snap
+        pcall(function()
+            if data.bp and data.bp.Parent then data.bp:Destroy() end
+            if data.bg and data.bg.Parent then data.bg:Destroy() end
+        end)
         if part and part.Parent then
             pcall(function()
                 part.CanCollide = data.origCC
-                part:SetNetworkOwnershipAuto()
+                part.Anchored   = data.origAnch or false
             end)
         end
     end
@@ -1563,7 +1589,9 @@ local function main()
     -- MAIN LOOP
     -- ══════════════════════════════════════════════════════════
     local function mainLoop()
-        RunService.Heartbeat:Connect(function(dt)
+        -- Stepped fires BEFORE the physics step, so BodyPosition targets are
+        -- set before the engine resolves forces — eliminates one extra frame of lag
+        RunService.Stepped:Connect(function(_, dt)
             if not scriptAlive then return end
 
             snakeT  = snakeT  + dt
@@ -1685,12 +1713,21 @@ local function main()
                     targetCF = getFormationCF(activeMode, i, n, pos, cf, t)
                 end
 
-                -- Direct CFrame lock — keeps part pinned every frame
+                -- Drive BodyPosition + BodyGyro to target (server-replicated physics)
+                -- This is what makes it live for everyone, not just the local client.
+                -- If the movers were somehow destroyed, fall back to direct CFrame.
                 if targetCF then
+                    local data = item.d
                     pcall(function()
-                        part.CFrame = targetCF
-                        part.AssemblyLinearVelocity  = Vector3.zero
-                        part.AssemblyAngularVelocity = Vector3.zero
+                        if data.bp and data.bp.Parent then
+                            data.bp.Position = targetCF.Position
+                            data.bg.CFrame   = targetCF
+                        else
+                            -- Fallback: direct CFrame + zero velocity
+                            part.CFrame                   = targetCF
+                            part.AssemblyLinearVelocity   = Vector3.zero
+                            part.AssemblyAngularVelocity  = Vector3.zero
+                        end
                     end)
                 end
             end
