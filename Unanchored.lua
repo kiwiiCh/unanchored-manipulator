@@ -71,8 +71,38 @@ local function main()
     local activeMode     = "none"
     local lastMode       = "none"
     local scriptAlive    = true
-    local radius         = 7
+    local radius         = 7        -- formation spread radius (studs)
     local detectionRange = math.huge
+
+    -- ── Physics controls (user-adjustable live) ───────────────
+    -- pullStrength: BodyPosition.P — how hard/fast parts snap to target.
+    --   50000 = default (snappy). 999999 = instant even from far away.
+    -- spinSpeed: extra rotation added to each part every second (rad/s).
+    --   0 = no spin. 5 = moderate. 20 = very fast tumble.
+    local pullStrength   = 50000
+    local spinSpeed      = 0       -- rad/s
+    local spinAccum      = 0       -- accumulates each Stepped tick
+
+    -- Call this whenever pullStrength changes so already-grabbed parts
+    -- feel the new strength immediately without needing a re-scan.
+    local function applyStrengthToAll()
+        local p = math.max(1, pullStrength)
+        local d = math.max(50, p * 0.05)  -- damping = 5% of P (prevents oscillation)
+        for _, data in pairs(controlled) do
+            pcall(function()
+                if data.bp and data.bp.Parent then
+                    data.bp.P = p
+                    data.bp.D = d
+                    data.bp.MaxForce = Vector3.new(1e12, 1e12, 1e12)
+                end
+                if data.bg and data.bg.Parent then
+                    data.bg.P = p
+                    data.bg.D = d
+                    data.bg.MaxTorque = Vector3.new(1e12, 1e12, 1e12)
+                end
+            end)
+        end
+    end
 
     local snakeT         = 0
     local snakeHistory   = {}
@@ -359,23 +389,29 @@ local function main()
         if not isValid(part) then return end
         local char = player.Character
         local root = char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso"))
-        if root and (part.Position - root.Position).Magnitude > detectionRange then return end
+        -- When pullStrength is very high we grab everything regardless of distance.
+        -- Below 5000 we respect detectionRange so low-strength stays local.
+        local effectiveRange = (pullStrength >= 5000) and math.huge or detectionRange
+        if root and (part.Position - root.Position).Magnitude > effectiveRange then return end
 
         local origCC   = part.CanCollide
         local origAnch = part.Anchored
         pcall(function() part.CanCollide = false end)
 
+        local p = math.max(1, pullStrength)
+        local d = math.max(50, p * 0.05)
+
         local bp = Instance.new("BodyPosition")
-        bp.MaxForce = Vector3.new(1e9,1e9,1e9)
-        bp.P        = 50000
-        bp.D        = 2500
+        bp.MaxForce = Vector3.new(1e12, 1e12, 1e12)
+        bp.P        = p
+        bp.D        = d
         bp.Position = part.Position
         bp.Parent   = part
 
         local bg = Instance.new("BodyGyro")
-        bg.MaxTorque = Vector3.new(1e9,1e9,1e9)
-        bg.P         = 50000
-        bg.D         = 2500
+        bg.MaxTorque = Vector3.new(1e12, 1e12, 1e12)
+        bg.P         = p
+        bg.D         = d
         bg.CFrame    = part.CFrame
         bg.Parent    = part
 
@@ -1418,6 +1454,13 @@ local function main()
             if not scriptAlive then return end
             snakeT=snakeT+dt; gasterT=gasterT+dt
 
+            -- Accumulate spin rotation angle
+            if spinSpeed ~= 0 then
+                spinAccum = spinAccum + spinSpeed * dt
+                -- Keep in range so it doesn't overflow after long sessions
+                if spinAccum > math.pi * 1000 then spinAccum = spinAccum - math.pi * 2000 end
+            end
+
             local char=player.Character
             local root=char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso"))
             if not root then return end
@@ -1500,14 +1543,22 @@ local function main()
 
                 if targetCF then
                     local data=item.d
+                    -- Apply per-part spin: each part rotates around its own axes.
+                    -- We offset each part's spin phase by its index so they don't
+                    -- all look identical (visible tumble instead of locked block).
+                    local spinCF = targetCF
+                    if spinSpeed ~= 0 then
+                        local phase = spinAccum + i * 0.18  -- stagger per part
+                        spinCF = targetCF * CFrame.Angles(phase * 0.5, phase, phase * 0.3)
+                    end
                     pcall(function()
                         if data.bp and data.bp.Parent then
-                            data.bp.Position=targetCF.Position
-                            data.bg.CFrame  =targetCF
+                            data.bp.Position = spinCF.Position
+                            data.bg.CFrame   = spinCF
                         else
-                            part.CFrame=targetCF
-                            part.AssemblyLinearVelocity=Vector3.zero
-                            part.AssemblyAngularVelocity=Vector3.zero
+                            part.CFrame = spinCF
+                            part.AssemblyLinearVelocity  = Vector3.zero
+                            part.AssemblyAngularVelocity = Vector3.zero
                         end
                     end)
                 end
@@ -1553,7 +1604,134 @@ local function main()
         local function sLbl2(t2,ord) local l=Instance.new("TextLabel"); l.Text=t2; l.Size=UDim2.new(1,0,0,16); l.BackgroundTransparency=1; l.TextColor3=Color3.fromRGB(160,110,255); l.TextSize=9; l.Font=Enum.Font.GothamBold; l.TextXAlignment=Enum.TextXAlignment.Left; l.LayoutOrder=ord; l.Parent=scroll end
         local function sBtn3(t2,bg,fg,ord) local b=Instance.new("TextButton"); b.Text=t2; b.Size=UDim2.new(1,0,0,28); b.BackgroundColor3=bg; b.TextColor3=fg; b.TextSize=9; b.Font=Enum.Font.GothamBold; b.BorderSizePixel=0; b.LayoutOrder=ord; b.Parent=scroll; Instance.new("UICorner",b); return b end
 
-        sLbl2("STATUS",1)
+        -- ────────────────────────────────────────────────────────
+        -- SETTINGS  (pull strength, radius, spin)
+        -- ────────────────────────────────────────────────────────
+        sLbl2("⚙ SETTINGS", 0)
+
+        -- Helper: one labelled row with a TextBox + an APPLY button
+        local function makeSettingRow(labelTxt, defaultVal, accentCol, order, onApply)
+            local row = Instance.new("Frame")
+            row.Size = UDim2.new(1, 0, 0, 38)
+            row.BackgroundColor3 = Color3.fromRGB(14, 12, 32)
+            row.BorderSizePixel  = 0
+            row.LayoutOrder = order
+            row.Parent = scroll
+            Instance.new("UICorner", row).CornerRadius = UDim.new(0, 6)
+            local rowStroke = Instance.new("UIStroke", row)
+            rowStroke.Color = Color3.fromRGB(50, 35, 90); rowStroke.Thickness = 1
+
+            -- Label
+            local lbl = Instance.new("TextLabel")
+            lbl.Text = labelTxt
+            lbl.Size = UDim2.new(0.48, 0, 0, 16)
+            lbl.Position = UDim2.fromOffset(6, 3)
+            lbl.BackgroundTransparency = 1
+            lbl.TextColor3 = accentCol
+            lbl.TextSize = 8; lbl.Font = Enum.Font.GothamBold
+            lbl.TextXAlignment = Enum.TextXAlignment.Left
+            lbl.Parent = row
+
+            -- TextBox
+            local tb = Instance.new("TextBox")
+            tb.Text = tostring(defaultVal)
+            tb.Size = UDim2.new(0.52, -36, 0, 22)
+            tb.Position = UDim2.new(0.46, 0, 0, 8)
+            tb.BackgroundColor3 = Color3.fromRGB(22, 18, 50)
+            tb.TextColor3 = Color3.fromRGB(255, 255, 255)
+            tb.TextSize = 10; tb.Font = Enum.Font.GothamBold
+            tb.ClearTextOnFocus = false
+            tb.BorderSizePixel = 0; tb.Parent = row
+            Instance.new("UICorner", tb).CornerRadius = UDim.new(0, 4)
+
+            -- APPLY button
+            local applyBtn = Instance.new("TextButton")
+            applyBtn.Text = "✓"
+            applyBtn.Size = UDim2.fromOffset(28, 22)
+            applyBtn.Position = UDim2.new(1, -32, 0, 8)
+            applyBtn.BackgroundColor3 = accentCol
+            applyBtn.TextColor3 = Color3.fromRGB(0, 0, 0)
+            applyBtn.TextSize = 11; applyBtn.Font = Enum.Font.GothamBold
+            applyBtn.BorderSizePixel = 0; applyBtn.Parent = row
+            Instance.new("UICorner", applyBtn).CornerRadius = UDim.new(0, 4)
+
+            -- Flash feedback
+            local function flash(ok)
+                applyBtn.BackgroundColor3 = ok and Color3.fromRGB(80,255,120) or Color3.fromRGB(255,80,80)
+                task.wait(0.25)
+                if applyBtn.Parent then applyBtn.BackgroundColor3 = accentCol end
+            end
+
+            -- Apply on button press
+            applyBtn.MouseButton1Click:Connect(function()
+                local num = tonumber(tb.Text)
+                if num then
+                    onApply(num)
+                    task.spawn(function() flash(true) end)
+                else
+                    task.spawn(function() flash(false) end)
+                end
+            end)
+
+            -- Also apply when Enter/FocusLost
+            tb.FocusLost:Connect(function(enterPressed)
+                if enterPressed then
+                    local num = tonumber(tb.Text)
+                    if num then onApply(num) end
+                end
+            end)
+
+            -- Current-value hint below the textbox
+            local hint = Instance.new("TextLabel")
+            hint.Size = UDim2.new(1, -6, 0, 10)
+            hint.Position = UDim2.fromOffset(6, 26)
+            hint.BackgroundTransparency = 1
+            hint.TextColor3 = Color3.fromRGB(80, 75, 120)
+            hint.TextSize = 7; hint.Font = Enum.Font.Gotham
+            hint.TextXAlignment = Enum.TextXAlignment.Left
+            hint.Parent = row
+
+            return tb, hint
+        end
+
+        -- ── Pull Strength ─────────────────────────────────────
+        local psTb, psHint = makeSettingRow(
+            "PULL STRENGTH", pullStrength,
+            Color3.fromRGB(255, 180, 60), 1,
+            function(val)
+                pullStrength = math.clamp(val, 1, 1e8)
+                applyStrengthToAll()   -- update all already-grabbed parts instantly
+                -- Re-sweep so far-away parts now get grabbed at new strength
+                sweepMap()
+                psHint.Text = "current: "..tostring(pullStrength).." | higher = faster pull"
+            end
+        )
+        psHint.Text = "current: "..tostring(pullStrength).." | higher = faster pull"
+
+        -- ── Radius ────────────────────────────────────────────
+        local radTb, radHint = makeSettingRow(
+            "RADIUS", radius,
+            Color3.fromRGB(80, 200, 255), 2,
+            function(val)
+                radius = math.clamp(val, 0.5, 500)
+                radHint.Text = "current: "..tostring(radius).." studs"
+            end
+        )
+        radHint.Text = "current: "..tostring(radius).." studs"
+
+        -- ── Spin Speed ────────────────────────────────────────
+        local spinTb, spinHint = makeSettingRow(
+            "SPIN SPEED", spinSpeed,
+            Color3.fromRGB(180, 100, 255), 3,
+            function(val)
+                spinSpeed = val      -- rad/s; 0 = off, negative = reverse
+                if val == 0 then spinAccum = 0 end  -- stop and reset angle
+                spinHint.Text = "current: "..tostring(val).." rad/s  (0 = off)"
+            end
+        )
+        spinHint.Text = "current: "..tostring(spinSpeed).." rad/s  (0 = off)"
+
+        sLbl2("STATUS", 1)
         local stLbl=Instance.new("TextLabel"); stLbl.Text="IDLE  |  PARTS: 0"; stLbl.Size=UDim2.new(1,0,0,16); stLbl.BackgroundTransparency=1; stLbl.TextColor3=Color3.fromRGB(80,255,140); stLbl.TextSize=9; stLbl.Font=Enum.Font.GothamBold; stLbl.TextXAlignment=Enum.TextXAlignment.Left; stLbl.LayoutOrder=2; stLbl.Parent=scroll
         local modLbl=Instance.new("TextLabel"); modLbl.Text="MODE: NONE"; modLbl.Size=UDim2.new(1,0,0,14); modLbl.BackgroundTransparency=1; modLbl.TextColor3=Color3.fromRGB(130,130,255); modLbl.TextSize=9; modLbl.Font=Enum.Font.GothamBold; modLbl.TextXAlignment=Enum.TextXAlignment.Left; modLbl.LayoutOrder=3; modLbl.Parent=scroll
 
