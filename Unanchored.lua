@@ -312,9 +312,17 @@ local function main()
     end
 
     -- ── Helpers ───────────────────────────────────────────────
+    -- Aim direction = character HRP look vector (not camera)
+    -- dist = how far in front of the character the target point is
     local function getAimPoint(dist)
-        local cam=workspace.CurrentCamera
-        return cam.CFrame.Position+cam.CFrame.LookVector*(dist or 30), cam.CFrame.LookVector
+        local char=player.Character
+        local root=char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso"))
+        if not root then
+            local cam=workspace.CurrentCamera
+            return cam.CFrame.Position+cam.CFrame.LookVector*(dist or 30), cam.CFrame.LookVector
+        end
+        local lookDir=root.CFrame.LookVector
+        return root.Position + lookDir*(dist or 30), lookDir
     end
 
     local function getSnakeTarget(i)
@@ -814,7 +822,8 @@ local function main()
             local pulse=1+math.sin(t*1.2)*0.03
             local wallTotal=#shrineWallIndices
             for wi, partIdx in ipairs(shrineWallIndices) do
-                local part=shrinePartList[partIdx]; if not part then continue end
+                local part=shrinePartList[partIdx]
+                if part then
                 local data=controlled[part]
                 if data and data.bp and data.bp.Parent then
                     local phi=(1+math.sqrt(5))/2; local i2=wi-1; local s=math.max(wallTotal,1)
@@ -823,6 +832,7 @@ local function main()
                     data.bp.Position=Vector3.new(shrineCenter.X+r*math.sin(theta)*math.cos(ang),shrineCenter.Y+r*math.sin(theta)*math.sin(ang),shrineCenter.Z+r*math.cos(theta))
                     if data.bg and data.bg.Parent then data.bg.CFrame=CFrame.new(data.bp.Position,shrineCenter)*CFrame.Angles(0,math.pi,0)end
                 end
+                end  -- end if part
             end
 
             -- Update slash bouncing
@@ -893,141 +903,359 @@ local function main()
     -- All use grabbed unanchored blocks with color changes.
     -- ════════════════════════════════════════════════════════════
 
-    -- Max Blue: ALL blocks rush to aim point, blue neon
+    -- ── Fling helper: apply huge velocity to any player's HRP on touch ──
+    local function addFlingOnTouch(part, flingVelocity)
+        if not (part and part.Parent) then return end
+        local conn
+        conn = part.Touched:Connect(function(hit)
+            -- Find if hit belongs to a player character
+            local hitChar = hit.Parent
+            local hitHRP  = hitChar and hitChar:FindFirstChild("HumanoidRootPart")
+            local hitHum  = hitChar and hitChar:FindFirstChildOfClass("Humanoid")
+            if hitHRP and hitHum and hitHum.Health > 0 then
+                pcall(function()
+                    hitHRP.AssemblyLinearVelocity = flingVelocity
+                end)
+            end
+        end)
+        -- Disconnect after 8 seconds to avoid leak
+        task.delay(8, function() pcall(function() conn:Disconnect() end) end)
+    end
+
+    -- ── Cooldown tracker ─────────────────────────────────────
+    local gojoLastFire = { blue=0, red=0, purple=0 }
+    local BLUE_CD   = 12   -- seconds (10s duration + 2s buffer)
+    local RED_CD    = 4
+    local PURPLE_CD = 6
+
+    -- ── Max Blue ─────────────────────────────────────────────
+    -- Blocks scatter outward then get pulled back to aim point cyclically.
+    -- Runs for 10 seconds then auto-stops.
+    local blueThread = nil
     local function fireMaxBlue()
-        gojoState="blue_hold"
-        colorAllControlled(Color3.fromRGB(20, 80, 255), Enum.Material.Neon)
-    end
-    local function stopMaxBlue()
-        if gojoState~="blue_hold" then return end
-        gojoState="idle"; restoreAllColors()
-    end
-
-    -- Reversal Red: ~RED_PART_COUNT blocks charge to player then fire
-    local function fireReversalRed()
-        if gojoState~="idle" then return end
-        gojoState="red_charge"
-        local char=player.Character; local root=char and(char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso"))
-        local playerPos=root and root.Position or Vector3.new(0,5,0)
-
-        -- Pick up to RED_PART_COUNT parts
-        local redParts={}
-        for part,_ in pairs(controlled) do
-            if part and part.Parent then
-                table.insert(redParts,part)
-                if #redParts>=RED_PART_COUNT then break end
-            end
+        local now = tick()
+        if now - gojoLastFire.blue < BLUE_CD and gojoState == "blue_hold" then
+            -- already running, stop it
+            gojoState = "idle"; restoreAllColors(); blueThread = nil; return
         end
+        if gojoState ~= "idle" then return end
+        gojoLastFire.blue = now
+        gojoState = "blue_hold"
+        colorAllControlled(Color3.fromRGB(20,100,255), Enum.Material.Neon)
 
-        colorParts(redParts, Color3.fromRGB(255, 40, 0), Enum.Material.Neon)
-
-        -- Phase 1: converge parts to player (charge)
-        for _,part in ipairs(redParts) do
-            local data=controlled[part]
-            if data and data.bp and data.bp.Parent then
-                data.bp.P=80000; data.bp.D=2000
-                data.bp.Position=playerPos+Vector3.new((math.random()-0.5)*2,(math.random()-0.5)*2,(math.random()-0.5)*2)
-            end
-        end
-
+        local th = {}; blueThread = th
         task.spawn(function()
-            task.wait(0.9)  -- charge duration
-            if not gojoActive then return end
-            gojoState="red_fire"
-            -- Phase 2: fire along camera aim direction
-            local aimPos, aimDir=getAimPoint(1)
-            for _,part in ipairs(redParts) do
-                if part and part.Parent then
-                    firePartVelocity(part, aimDir*900)
+            local elapsed   = 0
+            local DURATION  = 10
+            local CYCLE     = 1.4  -- scatter/pull cycle length in seconds
+            while gojoState == "blue_hold" and elapsed < DURATION do
+                local dt = task.wait()
+                if blueThread ~= th then return end  -- superseded
+                elapsed = elapsed + dt
+
+                local char = player.Character
+                local root = char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso"))
+                if not root then break end
+
+                local _, aimDir = getAimPoint(1)
+                local aimPt = root.Position + aimDir * 20
+
+                local cycleT = (elapsed % CYCLE) / CYCLE  -- 0→1 per cycle
+                -- First half: scatter outward in a sphere around aim point
+                -- Second half: pull tight to aim point
+                local pullFactor = cycleT < 0.5 and (cycleT * 2) or (1 - (cycleT-0.5)*2)
+                -- pullFactor: 0=tight cluster at aim, 1=scattered sphere
+
+                local allParts = {}
+                for part,_ in pairs(controlled) do if part and part.Parent then table.insert(allParts,part) end end
+                local n = #allParts
+                for i, part in ipairs(allParts) do
+                    local data = controlled[part]
+                    if data and data.bp and data.bp.Parent then
+                        -- Scattered position on sphere surface
+                        local phi = (1+math.sqrt(5))/2
+                        local i2  = i-1; local s = math.max(n,1)
+                        local theta2 = math.acos(math.clamp(1-2*(i2+0.5)/s,-1,1))
+                        local ang2   = 2*math.pi*i2/phi
+                        local scatterR = 12 + math.sin(elapsed*2+i*0.3)*3
+                        local scatterPos = aimPt + Vector3.new(
+                            scatterR*math.sin(theta2)*math.cos(ang2),
+                            scatterR*math.sin(theta2)*math.sin(ang2),
+                            scatterR*math.cos(theta2))
+                        -- Cluster at aim point
+                        local clusterPos = aimPt + Vector3.new(
+                            (math.random()-0.5)*2, (math.random()-0.5)*2, (math.random()-0.5)*2)
+                        -- Lerp between cluster and scattered based on cycle
+                        local targetPos = clusterPos:Lerp(scatterPos, pullFactor)
+                        data.bp.P = 60000; data.bp.D = 1800
+                        data.bp.Position = targetPos
+                        -- Pulse color between cyan and white-blue
+                        pcall(function()
+                            local p = (math.sin(elapsed*4+i*0.4)+1)/2
+                            part.Color = Color3.new(p*0.05, 0.4+p*0.4, 1)
+                        end)
+                    end
                 end
             end
-            task.wait(0.3)
-            if gojoActive then gojoState="idle" end
+            -- Auto-stop after duration or if state changed
+            if gojoState == "blue_hold" then
+                gojoState = "idle"
+                restoreAllColors()
+            end
+            blueThread = nil
         end)
     end
 
-    -- Hollow Purple: split blocks left/right (blue+red), merge, fire
-    local function fireHollowPurple()
-        if gojoState~="idle" then return end
-        gojoState="purple_split"
-        local cam=workspace.CurrentCamera
-        local camCF=cam.CFrame
-        local aimPos, aimDir=getAimPoint(25)
-        local leftOffset  = camCF.Position + camCF.LookVector*20 - camCF.RightVector*14
-        local rightOffset = camCF.Position + camCF.LookVector*20 + camCF.RightVector*14
+    local function stopMaxBlue()
+        if gojoState == "blue_hold" then
+            gojoState = "idle"; restoreAllColors(); blueThread = nil
+        end
+    end
 
-        -- Split controlled parts into two groups
-        local allParts={}
-        for part,_ in pairs(controlled) do if part and part.Parent then table.insert(allParts,part)end end
-        local half=math.ceil(#allParts/2)
+    -- ── Reversal Red ─────────────────────────────────────────
+    -- Blocks are sucked from wherever they are to a point directly in front
+    -- of the player. On fire they launch forward and fling anyone they hit.
+    local function fireReversalRed()
+        local now = tick()
+        if now - gojoLastFire.red < RED_CD then return end
+        if gojoState ~= "idle" then return end
+        gojoLastFire.red  = now
+        gojoState         = "red_charge"
+
+        local char = player.Character
+        local root = char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso"))
+        local playerPos = root and root.Position or Vector3.new(0,5,0)
+        local _, aimDir = getAimPoint(1)
+        local suckPt    = playerPos + aimDir * 4  -- right in front of player
+
+        -- Pick parts for this technique (up to RED_PART_COUNT)
+        local redParts = {}
+        for part,_ in pairs(controlled) do
+            if part and part.Parent then
+                table.insert(redParts, part)
+                if #redParts >= RED_PART_COUNT then break end
+            end
+        end
+
+        colorParts(redParts, Color3.fromRGB(255,50,0), Enum.Material.Neon)
+
+        -- Suck animation: parts spiral in from their current positions toward suckPt
+        task.spawn(function()
+            local elapsed = 0
+            local CHARGE  = 1.2  -- seconds to charge
+            while elapsed < CHARGE and gojoState == "red_charge" do
+                local dt = task.wait()
+                elapsed  = elapsed + dt
+                local progress = elapsed / CHARGE  -- 0→1
+
+                local char2 = player.Character
+                local root2 = char2 and (char2:FindFirstChild("HumanoidRootPart") or char2:FindFirstChild("Torso"))
+                if not root2 then break end
+                local _, ad = getAimPoint(1)
+                suckPt = root2.Position + ad * 4  -- track player movement
+
+                for i, part in ipairs(redParts) do
+                    local data = controlled[part]
+                    if data and data.bp and data.bp.Parent then
+                        -- Spiral: orbiting radius shrinks toward zero as progress→1
+                        local spiralR = (1-progress)*8
+                        local spiralAng = progress*math.pi*6 + i*(math.pi*2/#redParts)
+                        local offset = Vector3.new(
+                            math.cos(spiralAng)*spiralR,
+                            math.sin(spiralAng + i)*spiralR*0.5,
+                            math.sin(spiralAng)*spiralR)
+                        data.bp.P = 70000 + progress*30000
+                        data.bp.D = 1500
+                        data.bp.Position = suckPt + offset
+                        -- Glow brighter as we charge
+                        pcall(function()
+                            local p = progress
+                            part.Color = Color3.new(1, 0.2-p*0.15, 0)
+                        end)
+                    end
+                end
+            end
+
+            if gojoState ~= "red_charge" then return end
+            gojoState = "red_fire"
+
+            -- FIRE: strip BP/BG and blast everything forward
+            local char2 = player.Character
+            local root2 = char2 and (char2:FindFirstChild("HumanoidRootPart") or char2:FindFirstChild("Torso"))
+            local _, fireDir = getAimPoint(1)
+            if root2 then fireDir = root2.CFrame.LookVector end
+
+            for _, part in ipairs(redParts) do
+                if part and part.Parent then
+                    addFlingOnTouch(part, fireDir * 220)
+                    firePartVelocity(part, fireDir * 920)
+                end
+            end
+
+            task.wait(0.4)
+            if gojoActive then gojoState = "idle" end
+        end)
+    end
+
+    -- ── Hollow Purple ────────────────────────────────────────
+    -- Phase 1 (1s): blue group left, red group right.
+    -- Phase 2 (0.8s): both converge to aim point (purple).
+    -- Phase 3: LAUNCH with massive velocity.
+    -- While flying, creates a black-hole-style pull on nearby loose blocks.
+    local function fireHollowPurple()
+        local now = tick()
+        if now - gojoLastFire.purple < PURPLE_CD then return end
+        if gojoState ~= "idle" then return end
+        gojoLastFire.purple = now
+        gojoState           = "purple_split"
+
+        local char = player.Character
+        local root = char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso"))
+        if not root then gojoState="idle"; return end
+
+        local _, aimDir  = getAimPoint(1)
+        local aimDir2    = root.CFrame.LookVector  -- lock at cast time
+        local aimPt      = root.Position + aimDir2 * 30
+        local perpR      = root.CFrame.RightVector
+
+        local allParts = {}
+        for part,_ in pairs(controlled) do if part and part.Parent then table.insert(allParts,part) end end
+        local half     = math.ceil(#allParts/2)
 
         local blueGroup={}; local redGroup={}
         for i,part in ipairs(allParts) do
-            if i<=half then table.insert(blueGroup,part) else table.insert(redGroup,part)end
+            if i<=half then table.insert(blueGroup,part) else table.insert(redGroup,part) end
         end
 
-        colorParts(blueGroup, Color3.fromRGB(20,80,255),   Enum.Material.Neon)
-        colorParts(redGroup,  Color3.fromRGB(255,40,0),    Enum.Material.Neon)
+        colorParts(blueGroup, Color3.fromRGB(20,80,255),  Enum.Material.Neon)
+        colorParts(redGroup,  Color3.fromRGB(255,40,0),   Enum.Material.Neon)
 
-        -- Phase 1 (split apart, 1s): blue left, red right
-        for _,part in ipairs(blueGroup) do
-            local data=controlled[part]
-            if data and data.bp and data.bp.Parent then
-                data.bp.P=60000; data.bp.D=3000
-                data.bp.Position=leftOffset + Vector3.new((math.random()-0.5)*4,(math.random()-0.5)*4,(math.random()-0.5)*4)
+        -- Phase 1: spread 14 studs apart
+        local leftPt  = root.Position + aimDir2*18 - perpR*14
+        local rightPt = root.Position + aimDir2*18 + perpR*14
+
+        local function setGroupPositions(group, center)
+            for i,part in ipairs(group) do
+                local data = controlled[part]
+                if data and data.bp and data.bp.Parent then
+                    local off = Vector3.new((i%3-1)*2, (math.floor(i/3)%3-1)*2, (i%2)*1.5)
+                    data.bp.P = 60000; data.bp.D = 2000
+                    data.bp.Position = center + off
+                end
             end
         end
-        for _,part in ipairs(redGroup) do
-            local data=controlled[part]
-            if data and data.bp and data.bp.Parent then
-                data.bp.P=60000; data.bp.D=3000
-                data.bp.Position=rightOffset + Vector3.new((math.random()-0.5)*4,(math.random()-0.5)*4,(math.random()-0.5)*4)
-            end
-        end
+
+        setGroupPositions(blueGroup, leftPt)
+        setGroupPositions(redGroup,  rightPt)
 
         task.spawn(function()
-            task.wait(1.0)
-            if not gojoActive or gojoState~="purple_split" then return end
-            gojoState="purple_fire"
-
-            -- Phase 2 (merge, 0.8s): both groups rush to aim point
-            colorParts(allParts, Color3.fromRGB(160,0,255), Enum.Material.Neon)  -- purple
-            for _,part in ipairs(allParts) do
-                local data=controlled[part]
-                if data and data.bp and data.bp.Parent then
-                    data.bp.P=100000; data.bp.D=1500
-                    data.bp.Position=aimPos + Vector3.new((math.random()-0.5)*3,(math.random()-0.5)*3,(math.random()-0.5)*3)
+            -- Phase 1: hold split position for 1 second
+            local elapsed = 0
+            while elapsed < 1.0 and gojoState == "purple_split" do
+                local dt = task.wait(); elapsed = elapsed + dt
+                -- Animate slight orbit during split
+                local t2 = elapsed * 3
+                for i, part in ipairs(blueGroup) do
+                    local data = controlled[part]
+                    if data and data.bp and data.bp.Parent then
+                        local off = Vector3.new(math.cos(t2+i)*1.5, math.sin(t2+i)*1.5, 0)
+                        data.bp.Position = leftPt + off
+                    end
+                end
+                for i, part in ipairs(redGroup) do
+                    local data = controlled[part]
+                    if data and data.bp and data.bp.Parent then
+                        local off = Vector3.new(math.cos(t2+i)*1.5, math.sin(t2+i)*1.5, 0)
+                        data.bp.Position = rightPt + off
+                    end
                 end
             end
+            if gojoState ~= "purple_split" then return end
+            gojoState = "purple_fire"
 
-            task.wait(0.8)
-            if not gojoActive or gojoState~="purple_fire" then return end
+            -- Phase 2: converge to aim point with growing purple glow
+            colorParts(allParts, Color3.fromRGB(160,0,255), Enum.Material.Neon)
+            elapsed = 0
+            while elapsed < 0.8 and gojoState == "purple_fire" do
+                local dt = task.wait(); elapsed = elapsed + dt
+                local progress = elapsed / 0.8
+                for i, part in ipairs(allParts) do
+                    local data = controlled[part]
+                    if data and data.bp and data.bp.Parent then
+                        local off = Vector3.new(
+                            (math.random()-0.5)*(1-progress)*4,
+                            (math.random()-0.5)*(1-progress)*4,
+                            (math.random()-0.5)*(1-progress)*4)
+                        data.bp.P = 80000 + progress*40000
+                        data.bp.D = 1000
+                        data.bp.Position = aimPt + off*(1-progress)
+                        pcall(function()
+                            local p = progress
+                            part.Color = Color3.new(0.3+p*0.4, 0, 0.8+p*0.2)
+                        end)
+                    end
+                end
+            end
+            if gojoState ~= "purple_fire" then return end
 
-            -- Phase 3 (FIRE): massive velocity along aim direction
-            for _,part in ipairs(allParts) do
+            -- Phase 3: FIRE + black hole pull
+            for _, part in ipairs(allParts) do
                 if part and part.Parent then
-                    firePartVelocity(part, aimDir*1400)
+                    addFlingOnTouch(part, aimDir2 * 300)
+                    firePartVelocity(part, aimDir2 * 1600)
                 end
             end
 
-            task.wait(0.3)
-            if gojoActive then gojoState="idle" end
+            -- Black hole effect: for 3 seconds, any remaining controlled blocks
+            -- get sucked toward the projectile cluster's leading point
+            task.spawn(function()
+                local bhElapsed = 0
+                while bhElapsed < 3.0 and gojoActive do
+                    local dt2 = task.wait(); bhElapsed = bhElapsed + dt2
+                    -- Estimate projectile position along aim dir
+                    local bhCenter = aimPt + aimDir2 * (bhElapsed * 1600 * 0.25)  -- rough tracking
+                    for part, data in pairs(controlled) do
+                        if part and part.Parent and data.bp and data.bp.Parent then
+                            -- Pull all loose blocks toward the black hole
+                            local toCenter = bhCenter - part.Position
+                            local dist2    = math.max(toCenter.Magnitude, 1)
+                            local pull     = math.clamp(300/dist2, 0, 80)
+                            data.bp.P = 90000; data.bp.D = 500
+                            data.bp.Position = part.Position + toCenter.Unit * pull * dt2 * 20
+                            pcall(function() part.Color = Color3.fromRGB(80,0,140) end)
+                        end
+                    end
+                end
+                if gojoActive then
+                    gojoState = "idle"
+                    restoreAllColors()
+                end
+            end)
+
+            -- Main task ends here; black hole runs in its own thread
+            task.wait(3.2)
+            if gojoActive and (gojoState == "purple_fire" or gojoState == "idle") then
+                gojoState = "idle"
+            end
         end)
     end
 
-    -- DE Infinity: blocks form large sphere around player, slow orbit, white/black theme
+    -- ── DE Infinity ───────────────────────────────────────────
     local function activateDeInfinity(rootPos)
-        gojoState="de_infinity"
-        gojoInfinityAngle=0
+        gojoState = "de_infinity"
+        gojoInfinityAngle = 0
         colorAllControlled(Color3.fromRGB(240,240,255), Enum.Material.Neon)
-        -- CanCollide off (infinity = everything passes through — the inside is calm)
-        for part,_ in pairs(controlled) do pcall(function()part.CanCollide=false end)end
+        for part,_ in pairs(controlled) do pcall(function() part.CanCollide=false end) end
     end
 
     local function deactivateDeInfinity()
-        gojoState="idle"
+        gojoState = "idle"
         restoreAllColors()
-        for part,_ in pairs(controlled) do pcall(function()part.CanCollide=false end)end
+        for part,_ in pairs(controlled) do pcall(function() part.CanCollide=false end) end
+    end
+
+    local function detectAllPartsForGojo()
+        fullSweep()
     end
 
     local function updateGojo(dt, rootPos)
@@ -1035,16 +1263,8 @@ local function main()
         gojoOrbitAngle=gojoOrbitAngle+dt
 
         if gojoState=="blue_hold" then
-            -- All blocks rush toward aim point
-            local aimPos,_=getAimPoint(22)
-            for part,data in pairs(controlled) do
-                if part and part.Parent and data.bp and data.bp.Parent then
-                    data.bp.P=90000; data.bp.D=1500
-                    -- Small spread around aim point so they form a tight sphere
-                    local off=getSphereShellPos(1,1)*3  -- tight cluster
-                    data.bp.Position=aimPos+Vector3.new(math.random(-2,2),math.random(-2,2),math.random(-2,2))
-                end
-            end
+            -- Animation handled inside fireMaxBlue task.spawn loop.
+            -- updateGojo just needs to keep the state alive; nothing to do here.
 
         elseif gojoState=="de_infinity" then
             -- Sphere of blocks orbiting around player with slow rotation
@@ -1052,7 +1272,8 @@ local function main()
             for part,_ in pairs(controlled) do if part and part.Parent then table.insert(allParts,part)end end
             local n=#allParts; local t=tick()
             for i,part in ipairs(allParts) do
-                local data=controlled[part]; if not(data and data.bp and data.bp.Parent) then continue end
+                local data=controlled[part]
+                if data and data.bp and data.bp.Parent then
                 local phi=(1+math.sqrt(5))/2; local i2=i-1; local s=math.max(n,1)
                 local theta=math.acos(math.clamp(1-2*(i2+0.5)/s,-1,1)); local ang=2*math.pi*i2/phi+t*0.3
                 local r=gojoInfinityRadius*(0.95+math.sin(t*0.7+i*0.2)*0.05)
@@ -1069,6 +1290,7 @@ local function main()
                     local pulse=(math.sin(t*2+i*0.3)+1)/2
                     part.Color=Color3.new(0.85+pulse*0.15, 0.85+pulse*0.12, 1)
                 end)
+                end -- end if data
             end
         end
     end
@@ -1322,35 +1544,73 @@ local function main()
 
         local function gBtn(t2,yp,bg,fg)local b=Instance.new("TextButton",panel);b.Text=t2;b.Size=UDim2.new(1,-12,0,32);b.Position=UDim2.fromOffset(6,yp);b.BackgroundColor3=bg;b.TextColor3=fg;b.TextSize=10;b.Font=Enum.Font.GothamBold;b.BorderSizePixel=0;Instance.new("UICorner",b);return b end
 
-        local blueBtn  =gBtn("◈ MAX BLUE",      50,  Color3.fromRGB(5,15,55),   Color3.fromRGB(60,140,255))
-        local redBtn   =gBtn("◈ REVERSAL RED",  86,  Color3.fromRGB(45,8,5),    Color3.fromRGB(255,70,40))
-        local purpleBtn=gBtn("◈ HOLLOW PURPLE", 122, Color3.fromRGB(30,5,45),   Color3.fromRGB(200,80,255))
-        local deBtn    =gBtn("◈ DE: INFINITY",  158, Color3.fromRGB(10,10,35),  Color3.fromRGB(200,200,255))
+        local detectBtn =gBtn("🔍 DETECT PARTS",   50,  Color3.fromRGB(20,40,20),   Color3.fromRGB(80,255,80))
+        local blueBtn   =gBtn("◈ MAX BLUE",         86,  Color3.fromRGB(5,15,55),    Color3.fromRGB(60,140,255))
+        local redBtn    =gBtn("◈ REVERSAL RED",     122, Color3.fromRGB(45,8,5),     Color3.fromRGB(255,70,40))
+        local purpleBtn =gBtn("◈ HOLLOW PURPLE",    158, Color3.fromRGB(30,5,45),    Color3.fromRGB(200,80,255))
+        local deBtn     =gBtn("◈ DE: INFINITY",     194, Color3.fromRGB(10,10,35),   Color3.fromRGB(200,200,255))
 
-        -- Max Blue: hold to attract, release to stop
-        blueBtn.MouseButton1Down:Connect(function()
-            if gojoState=="idle" then fireMaxBlue() end
+        -- Resize panel to fit 5 buttons
+        panel.Size = UDim2.fromOffset(170, 240)
+
+        -- Visual flash when button activates
+        local function btnFlash(btn, col)
+            local orig = btn.BackgroundColor3
+            btn.BackgroundColor3 = col
+            task.wait(0.15)
+            if btn.Parent then btn.BackgroundColor3 = orig end
+        end
+
+        detectBtn.MouseButton1Click:Connect(function()
+            task.spawn(function()
+                btnFlash(detectBtn, Color3.fromRGB(40,120,40))
+                detectAllPartsForGojo()
+                stateLbl.Text = "DETECTED: "..partCount.." parts"
+            end)
         end)
-        blueBtn.MouseButton1Up:Connect(function()
-            if gojoState=="blue_hold" then stopMaxBlue() end
+
+        -- Max Blue: click to start, click again to stop
+        blueBtn.MouseButton1Click:Connect(function()
+            if gojoState == "blue_hold" then
+                stopMaxBlue()
+                blueBtn.Text = "◈ MAX BLUE"
+            elseif gojoState == "idle" then
+                fireMaxBlue()
+                blueBtn.Text = "◈ MAX BLUE  [STOP]"
+                task.spawn(function()
+                    -- Auto-revert button label after 10s
+                    task.wait(11)
+                    if blueBtn.Parent then blueBtn.Text = "◈ MAX BLUE" end
+                end)
+            end
         end)
-        -- Also handle touch (same events work for touch on buttons)
 
         redBtn.MouseButton1Click:Connect(function()
-            if gojoState=="idle" then fireReversalRed() end
+            local now = tick()
+            if gojoState ~= "idle" then return end
+            if now - gojoLastFire.red < RED_CD then
+                stateLbl.Text = "RED: cooldown "..(math.ceil(RED_CD-(now-gojoLastFire.red)).."s")
+                return
+            end
+            task.spawn(function() btnFlash(redBtn, Color3.fromRGB(200,50,20)) end)
+            fireReversalRed()
         end)
 
         purpleBtn.MouseButton1Click:Connect(function()
-            if gojoState=="idle" or gojoState=="blue_hold" then
-                if gojoState=="blue_hold" then stopMaxBlue() end
-                fireHollowPurple()
+            local now = tick()
+            if gojoState ~= "idle" then return end
+            if now - gojoLastFire.purple < PURPLE_CD then
+                stateLbl.Text = "PURPLE: cooldown "..(math.ceil(PURPLE_CD-(now-gojoLastFire.purple)).."s")
+                return
             end
+            task.spawn(function() btnFlash(purpleBtn, Color3.fromRGB(120,0,200)) end)
+            fireHollowPurple()
         end)
 
         local deActive=false
         deBtn.MouseButton1Click:Connect(function()
             if not deActive and gojoState=="idle" then
-                deActive=true; deBtn.Text="◈ DEACTIVATE"
+                deActive=true; deBtn.Text="◈ DEACTIVATE ∞"
                 local char=player.Character
                 local root=char and(char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso"))
                 activateDeInfinity(root and root.Position or Vector3.new(0,5,0))
