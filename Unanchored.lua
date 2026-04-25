@@ -197,10 +197,30 @@ local function main()
     local RED_PART_COUNT=10  -- how many parts reversal red uses
 
     -- ── Mode tables ───────────────────────────────────────────
-    local CFRAME_MODES={heart=true,rings=true,wall=true,box=true,gasterhand=true,gaster2hands=true,wings=true,sphere=true,spherebender=true,tank=true,car=true,de_shrine=true,gojo=true}
+    local CFRAME_MODES={heart=true,rings=true,wall=true,box=true,gasterhand=true,gaster2hands=true,wings=true,sphere=true,spherebender=true,tank=true,car=true,de_shrine=true,gojo=true,pet=true}
     local GASTER_MODES={gasterhand=true,gaster2hands=true}; local SPHERE_MODES={sphere=true}
     local SPHERE_BENDER_MODES={spherebender=true}; local TANK_MODES={tank=true}
     local CAR_MODES={car=true}; local SHRINE_MODES={de_shrine=true}; local GOJO_MODES={gojo=true}
+    local PET_MODES={pet=true}
+
+    -- ── Lock blocks state ─────────────────────────────────────
+    -- When enabled: every controlled part has MaxForce cranked to 1e14,
+    -- SetNetworkOwner(player) re-asserted each sweep, and CanCollide=false
+    -- so nobody can physically shove them.  The BP/BG already resist movement;
+    -- the extra MaxForce and ownership re-claim make them immovable.
+    local lockedBlocks = false
+
+    -- ── Pet mode state ────────────────────────────────────────
+    local petSubGui      = nil
+    local petActive      = false
+    local petOwners      = {}   -- { [playerName] = true }
+    local petOwnerList   = {}   -- ordered list for display
+    local petState       = "idle"   -- idle/follow/stay/dance/orbit/wall/split/ring/stop
+    local petOrbitDist   = 8
+    local petDanceT      = 0
+    local petDancePhase  = 0
+    local petSplitOwners = {}   -- for split: {[ownerName]={parts={}}}
+    local petGuiUpdateFn = nil  -- set by createPetGui, called to refresh owner list
 
     -- ── Gaster/Wing data (compact) ────────────────────────────
     local HAND_SCALE=2.8
@@ -227,6 +247,7 @@ local function main()
     local sweepMap,fullSweep,rebuildSBGui
     local destroyTank,destroyTankGui,destroyCar,destroyCarGui
     local destroyShrine,destroyShrineGui,destroyGojo,destroyGojoGui
+    local destroyPet,destroyPetGui
 
     -- ── Validation ────────────────────────────────────────────
     local function isValid(obj)
@@ -296,17 +317,45 @@ local function main()
         end
     end
 
-    -- fullSweep: NO distance check, grabs EVERYTHING valid in workspace
+    -- fullSweep: no distance filter, grabs EVERY unanchored part in workspace.
+    -- Also re-asserts network ownership so nobody else can move our blocks.
     fullSweep=function()
         for _,obj in ipairs(workspace:GetDescendants())do
             if isValid(obj) and not controlled[obj]then
                 local origCC=obj.CanCollide; local origAnch=obj.Anchored
                 pcall(function()obj.CanCollide=false end)
+                pcall(function()obj:SetNetworkOwner(player)end)  -- claim ownership
                 local p=math.max(1,pullStrength); local d=math.max(50,p*0.05)
                 local bp=Instance.new("BodyPosition"); bp.MaxForce=Vector3.new(1e12,1e12,1e12); bp.P=p; bp.D=d; bp.Position=obj.Position; bp.Parent=obj
-                local bg=Instance.new("BodyGyro"); bg.MaxTorque=Vector3.new(1e12,1e12,1e12); bg.P=p; bg.D=d; bg.CFrame=obj.CFrame; bg.Parent=obj
+                local bg=Instance.new("BodyGyro"); bg.MaxTorque=Vector3.new(1e12,1e12,1e12); bp.P=p; bg.D=d; bg.CFrame=obj.CFrame; bg.Parent=obj
                 controlled[obj]={origCC=origCC,origAnch=origAnch,bp=bp,bg=bg,origColor=obj.Color,origMaterial=obj.Material}
                 partCount=partCount+1
+            elseif controlled[obj] then
+                -- Re-assert ownership on already-controlled parts (in case someone grabbed)
+                pcall(function()obj:SetNetworkOwner(player)end)
+            end
+        end
+    end
+
+    -- lockAllNow: maximum-force lock on all controlled parts.
+    -- Called every frame when lockedBlocks=true.
+    local function lockAllNow()
+        for part, data in pairs(controlled) do
+            if part and part.Parent then
+                pcall(function()
+                    part:SetNetworkOwner(player)
+                    part.CanCollide = false
+                    if data.bp and data.bp.Parent then
+                        data.bp.MaxForce = Vector3.new(1e14,1e14,1e14)
+                        data.bp.P = 200000
+                        data.bp.D = 8000
+                    end
+                    if data.bg and data.bg.Parent then
+                        data.bg.MaxTorque = Vector3.new(1e14,1e14,1e14)
+                        data.bg.P = 200000
+                        data.bg.D = 8000
+                    end
+                end)
             end
         end
     end
@@ -903,23 +952,37 @@ local function main()
     -- All use grabbed unanchored blocks with color changes.
     -- ════════════════════════════════════════════════════════════
 
-    -- ── Fling helper: apply huge velocity to any player's HRP on touch ──
-    local function addFlingOnTouch(part, flingVelocity)
+    -- ── Fling helper ──────────────────────────────────────────
+    -- Uses an Explosion on touch — explosions run server-side in Roblox
+    -- and apply BlastPressure to ALL physics objects including player HRPs,
+    -- making this the most reliable way to fling players in FE games.
+    local function addFlingOnTouch(part, _flingVelocity)
         if not (part and part.Parent) then return end
-        local conn
+        local conn; local fired = false
         conn = part.Touched:Connect(function(hit)
-            -- Find if hit belongs to a player character
+            if fired then return end
+            if not hit or not hit.Parent then return end
+            -- Only fling when touching a character part
             local hitChar = hit.Parent
-            local hitHRP  = hitChar and hitChar:FindFirstChild("HumanoidRootPart")
             local hitHum  = hitChar and hitChar:FindFirstChildOfClass("Humanoid")
-            if hitHRP and hitHum and hitHum.Health > 0 then
-                pcall(function()
-                    hitHRP.AssemblyLinearVelocity = flingVelocity
-                end)
-            end
+            if not hitHum or hitHum.Health <= 0 then return end
+            -- Don't fling ourselves
+            local myChar = player.Character
+            if myChar and (hit:IsDescendantOf(myChar) or hitChar == myChar) then return end
+            fired = true
+            pcall(function() conn:Disconnect() end)
+            -- Explosion at impact — BlastPressure flings all nearby physics objects
+            -- including the player's HumanoidRootPart
+            pcall(function()
+                local ex = Instance.new("Explosion")
+                ex.Position        = part.Position
+                ex.BlastRadius     = 8
+                ex.BlastPressure   = 800000   -- strong enough to send players flying
+                ex.DestroyJointRadiusPercent = 0  -- don't destroy welds
+                ex.Parent = workspace
+            end)
         end)
-        -- Disconnect after 8 seconds to avoid leak
-        task.delay(8, function() pcall(function() conn:Disconnect() end) end)
+        task.delay(10, function() pcall(function() conn:Disconnect() end) end)
     end
 
     -- ── Cooldown tracker ─────────────────────────────────────
@@ -999,8 +1062,7 @@ local function main()
             end
             -- Auto-stop after duration or if state changed
             if gojoState == "blue_hold" then
-                gojoState = "idle"
-                restoreAllColors()
+                safeResetGojo()
             end
             blueThread = nil
         end)
@@ -1008,7 +1070,7 @@ local function main()
 
     local function stopMaxBlue()
         if gojoState == "blue_hold" then
-            gojoState = "idle"; restoreAllColors(); blueThread = nil
+            safeResetGojo()
         end
     end
 
@@ -1093,7 +1155,7 @@ local function main()
             end
 
             task.wait(0.4)
-            if gojoActive then gojoState = "idle" end
+            if gojoActive then safeResetGojo() end
         end)
     end
 
@@ -1234,9 +1296,7 @@ local function main()
 
             -- Main task ends here; black hole runs in its own thread
             task.wait(3.2)
-            if gojoActive and (gojoState == "purple_fire" or gojoState == "idle") then
-                gojoState = "idle"
-            end
+            if gojoActive then safeResetGojo() end
         end)
     end
 
@@ -1249,8 +1309,7 @@ local function main()
     end
 
     local function deactivateDeInfinity()
-        gojoState = "idle"
-        restoreAllColors()
+        safeResetGojo()
         for part,_ in pairs(controlled) do pcall(function() part.CanCollide=false end) end
     end
 
@@ -1267,38 +1326,49 @@ local function main()
             -- updateGojo just needs to keep the state alive; nothing to do here.
 
         elseif gojoState=="de_infinity" then
-            -- Sphere of blocks orbiting around player with slow rotation
+            -- Large sphere of blocks orbiting the player slowly.
             local allParts={}
-            for part,_ in pairs(controlled) do if part and part.Parent then table.insert(allParts,part)end end
-            local n=#allParts; local t=tick()
+            for part,_ in pairs(controlled) do if part and part.Parent then table.insert(allParts,part) end end
+            local n=#allParts; local t2=tick()
             for i,part in ipairs(allParts) do
                 local data=controlled[part]
                 if data and data.bp and data.bp.Parent then
-                local phi=(1+math.sqrt(5))/2; local i2=i-1; local s=math.max(n,1)
-                local theta=math.acos(math.clamp(1-2*(i2+0.5)/s,-1,1)); local ang=2*math.pi*i2/phi+t*0.3
-                local r=gojoInfinityRadius*(0.95+math.sin(t*0.7+i*0.2)*0.05)
-                data.bp.P=50000; data.bp.D=2500
-                data.bp.Position=Vector3.new(
-                    rootPos.X+r*math.sin(theta)*math.cos(ang),
-                    rootPos.Y+r*math.sin(theta)*math.sin(ang),
-                    rootPos.Z+r*math.cos(theta))
-                if data.bg and data.bg.Parent then
-                    data.bg.CFrame=CFrame.new(data.bp.Position,rootPos)*CFrame.Angles(0,math.pi,0)
+                    local phi=(1+math.sqrt(5))/2
+                    local idx=i-1; local s=math.max(n,1)
+                    local theta=math.acos(math.clamp(1-2*(idx+0.5)/s,-1,1))
+                    local ang=2*math.pi*idx/phi + t2*0.25  -- slow rotation
+                    local r=gojoInfinityRadius*(0.95+math.sin(t2*0.7+i*0.2)*0.05)
+                    data.bp.P=60000; data.bp.D=3000
+                    data.bp.MaxForce=Vector3.new(1e12,1e12,1e12)
+                    data.bp.Position=Vector3.new(
+                        rootPos.X + r*math.sin(theta)*math.cos(ang),
+                        rootPos.Y + r*math.sin(theta)*math.sin(ang),
+                        rootPos.Z + r*math.cos(theta))
+                    if data.bg and data.bg.Parent then
+                        data.bg.CFrame=CFrame.new(data.bp.Position,rootPos)*CFrame.Angles(0,math.pi,0)
+                    end
+                    -- Gentle white-blue pulse
+                    pcall(function()
+                        local pulse=(math.sin(t2*1.5+i*0.3)+1)/2
+                        part.Color=Color3.new(0.88+pulse*0.12, 0.88+pulse*0.10, 1)
+                        part.Material=Enum.Material.Neon
+                    end)
                 end
-                -- Pulse between white and very light blue
-                pcall(function()
-                    local pulse=(math.sin(t*2+i*0.3)+1)/2
-                    part.Color=Color3.new(0.85+pulse*0.15, 0.85+pulse*0.12, 1)
-                end)
-                end -- end if data
             end
         end
     end
 
-    destroyGojo=function()
-        gojoState="idle"; gojoActive=false
+    -- ── Safe state reset: always callable, clears stuck states ──
+    local function safeResetGojo()
+        gojoState  = "idle"
+        blueThread = nil
         restoreAllColors()
-        for part,_ in pairs(controlled) do pcall(function()part.CanCollide=false end)end
+        for part,_ in pairs(controlled) do pcall(function()part.CanCollide=false end) end
+    end
+
+    destroyGojo=function()
+        safeResetGojo()
+        gojoActive=false
     end
 
     -- ════════════════════════════════════════════════════════════
@@ -1518,7 +1588,307 @@ local function main()
         makeDraggable(titleBar,panel,false)
     end
 
-    -- ── Gojo GUI ──────────────────────────────────────────────
+    -- ════════════════════════════════════════════════════════════
+    -- PET MODE
+    -- Chat commands: !pet <name>  then  !follow/!stay/!dance etc.
+    -- ════════════════════════════════════════════════════════════
+
+    -- Get all parts assigned to an owner (for split mode)
+    local function getPetPartsForOwner(ownerName)
+        if petSplitOwners[ownerName] then return petSplitOwners[ownerName] end
+        -- If no split, all controlled parts
+        local arr={}
+        for part,_ in pairs(controlled) do if part and part.Parent then table.insert(arr,part) end end
+        return arr
+    end
+
+    -- Get character root for a player name
+    local function getPlayerRoot(name)
+        for _,p in ipairs(Players:GetPlayers()) do
+            if p.Name:lower()==name:lower() or p.DisplayName:lower()==name:lower() then
+                local char=p.Character
+                return char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso"))
+            end
+        end
+    end
+
+    local function updatePet(dt, rootPos)
+        if not petActive then return end
+        local t=tick()
+        petDanceT=petDanceT+dt
+
+        -- For each owner, get their assigned parts
+        local function getParts(ownerName)
+            if petSplitOwners[ownerName] then return petSplitOwners[ownerName]
+            else
+                local arr={}
+                for part,_ in pairs(controlled) do if part and part.Parent then table.insert(arr,part) end end
+                return arr
+            end
+        end
+
+        local function moveParts(parts, targetPos, orbitDist, orbitT, mode2)
+            local n=math.max(#parts,1)
+            for i,part in ipairs(parts) do
+                local data=controlled[part]; if not(data and data.bp and data.bp.Parent) then return end
+                local tgt
+
+                if mode2=="follow" or mode2=="stay" then
+                    -- Hover in a small sphere cluster around target
+                    local phi=(1+math.sqrt(5))/2; local i2=i-1; local s=math.max(n,1)
+                    local theta=math.acos(math.clamp(1-2*(i2+0.5)/s,-1,1)); local ang=2*math.pi*i2/phi
+                    local r=1.5+math.floor(i/10)*1.2
+                    tgt=targetPos+Vector3.new(r*math.sin(theta)*math.cos(ang),r*math.sin(theta)*math.sin(ang)+2,r*math.cos(theta))
+
+                elseif mode2=="orbit" then
+                    local ang2=orbitT*1.5+i*(math.pi*2/n)
+                    tgt=targetPos+Vector3.new(math.cos(ang2)*orbitDist,2,math.sin(ang2)*orbitDist)
+
+                elseif mode2=="ring" then
+                    local ang2=orbitT*2+i*(math.pi*2/n)
+                    tgt=targetPos+Vector3.new(math.cos(ang2)*orbitDist,0.5,math.sin(ang2)*orbitDist)
+
+                elseif mode2=="wall" then
+                    -- Flat grid in front of target facing
+                    local root2=getPlayerRoot(petOwnerList[1] or "")
+                    local fwd=root2 and root2.CFrame.LookVector or Vector3.new(0,0,-1)
+                    local right=root2 and root2.CFrame.RightVector or Vector3.new(1,0,0)
+                    local cols=math.max(1,math.ceil(math.sqrt(n))); local col=(i-1)%cols-math.floor(cols/2); local row=math.floor((i-1)/cols)
+                    tgt=targetPos+fwd*5+right*(col*1.8)+Vector3.new(0,row*1.8,0)
+
+                elseif mode2=="dance" then
+                    -- Random swirling pattern that cycles through phases
+                    local phase=math.floor(petDanceT/2)%4
+                    if phase==0 then -- spin ring
+                        local ang2=petDanceT*3+i*(math.pi*2/n); tgt=targetPos+Vector3.new(math.cos(ang2)*4,1+math.sin(petDanceT*2)*2,math.sin(ang2)*4)
+                    elseif phase==1 then -- vertical helix
+                        local ang2=petDanceT*4+i*(math.pi*2/n); tgt=targetPos+Vector3.new(math.cos(ang2)*3,(i/n)*8-4+math.sin(petDanceT)*1,math.sin(ang2)*3)
+                    elseif phase==2 then -- sphere pulse
+                        local phi=(1+math.sqrt(5))/2; local i2=i-1; local s=math.max(n,1)
+                        local theta=math.acos(math.clamp(1-2*(i2+0.5)/s,-1,1)); local ang3=2*math.pi*i2/phi
+                        local r=5+math.sin(petDanceT*3)*2
+                        tgt=targetPos+Vector3.new(r*math.sin(theta)*math.cos(ang3),r*math.sin(theta)*math.sin(ang3)+2,r*math.cos(theta))
+                    else -- chaos swarm
+                        local ang2=petDanceT*2+i*1.3; local r=3+math.sin(i+petDanceT*1.5)*2
+                        tgt=targetPos+Vector3.new(math.cos(ang2+i)*r, math.sin(i*0.7+petDanceT)*3+2, math.sin(ang2)*r)
+                    end
+
+                elseif mode2=="stop" then
+                    -- Stay exactly where they are
+                    tgt=part.Position
+
+                else -- default hover above
+                    tgt=targetPos+Vector3.new(0,4,0)
+                end
+
+                if tgt then
+                    data.bp.P=70000; data.bp.D=2500; data.bp.MaxForce=Vector3.new(1e12,1e12,1e12)
+                    data.bp.Position=tgt
+                end
+            end
+        end
+
+        if #petOwnerList==0 then
+            -- No owner, hover above local player
+            local arr={}
+            for part,_ in pairs(controlled) do if part and part.Parent then table.insert(arr,part) end end
+            moveParts(arr, rootPos, petOrbitDist, t, petState)
+        elseif #petOwnerList==1 then
+            local root=getPlayerRoot(petOwnerList[1])
+            local tpos=root and root.Position or rootPos
+            local arr=getParts(petOwnerList[1])
+            moveParts(arr, tpos, petOrbitDist, t, petState)
+        else
+            -- Split between owners
+            for _,ownerName in ipairs(petOwnerList) do
+                local root=getPlayerRoot(ownerName)
+                local tpos=root and root.Position or rootPos
+                local arr=getParts(ownerName)
+                moveParts(arr, tpos, petOrbitDist, t, petState)
+            end
+        end
+    end
+
+    destroyPet=function()
+        petActive=false; petOwners={}; petOwnerList={}; petState="idle"
+        petSplitOwners={}
+        if petGuiUpdateFn then pcall(petGuiUpdateFn) end
+    end
+
+    destroyPetGui=function()
+        if petSubGui and petSubGui.Parent then petSubGui:Destroy() end
+        petSubGui=nil; petGuiUpdateFn=nil
+    end
+
+    local function rebuildPetOwnerList(listFrame)
+        -- Clear existing labels
+        for _,child in ipairs(listFrame:GetChildren()) do
+            if child:IsA("TextLabel") then child:Destroy() end
+        end
+        if #petOwnerList==0 then
+            local l=Instance.new("TextLabel",listFrame); l.Text="No owners yet.  Use !pet <name>"
+            l.Size=UDim2.new(1,0,0,18); l.BackgroundTransparency=1; l.TextColor3=Color3.fromRGB(100,100,130)
+            l.TextSize=9; l.Font=Enum.Font.Gotham; l.TextXAlignment=Enum.TextXAlignment.Left
+        else
+            for idx,name in ipairs(petOwnerList) do
+                local l=Instance.new("TextLabel",listFrame); l.Text="• "..name
+                l.Size=UDim2.new(1,0,0,18); l.BackgroundTransparency=1; l.TextColor3=Color3.fromRGB(140,220,140)
+                l.TextSize=9; l.Font=Enum.Font.GothamBold; l.TextXAlignment=Enum.TextXAlignment.Left
+                l.LayoutOrder=idx
+            end
+        end
+        local lay=listFrame:FindFirstChildOfClass("UIListLayout")
+        if lay then listFrame.CanvasSize=UDim2.fromOffset(0, lay.AbsoluteContentSize.Y+4) end
+    end
+
+    local function createPetGui()
+        destroyPetGui()
+        local pg=player:WaitForChild("PlayerGui")
+        local sg=Instance.new("ScreenGui"); sg.Name="PetSubGUI"; sg.ResetOnSpawn=false; sg.DisplayOrder=1000; sg.ZIndexBehavior=Enum.ZIndexBehavior.Sibling; sg.Parent=pg; petSubGui=sg
+
+        local W=210; local panel=Instance.new("Frame"); panel.Size=UDim2.fromOffset(W,380); panel.Position=UDim2.new(0.5,15,0.5,-190); panel.BackgroundColor3=Color3.fromRGB(8,14,8); panel.BorderSizePixel=0; panel.Parent=sg; Instance.new("UICorner",panel).CornerRadius=UDim.new(0,8)
+        local stk=Instance.new("UIStroke",panel); stk.Color=Color3.fromRGB(60,180,60); stk.Thickness=1.5
+
+        -- Title bar
+        local titleBar=Instance.new("Frame"); titleBar.Size=UDim2.new(1,0,0,28); titleBar.BackgroundColor3=Color3.fromRGB(16,30,16); titleBar.BorderSizePixel=0; titleBar.ZIndex=10; titleBar.Parent=panel; Instance.new("UICorner",titleBar).CornerRadius=UDim.new(0,8)
+        local tLbl=Instance.new("TextLabel",titleBar); tLbl.Text="🐾 PET MODE"; tLbl.Size=UDim2.new(1,-40,1,0); tLbl.Position=UDim2.fromOffset(8,0); tLbl.BackgroundTransparency=1; tLbl.TextColor3=Color3.fromRGB(100,240,100); tLbl.TextSize=12; tLbl.Font=Enum.Font.GothamBold; tLbl.TextXAlignment=Enum.TextXAlignment.Left; tLbl.ZIndex=10
+        local closeX=Instance.new("TextButton",titleBar); closeX.Text="✕"; closeX.Size=UDim2.fromOffset(24,22); closeX.Position=UDim2.new(1,-28,0,3); closeX.BackgroundColor3=Color3.fromRGB(120,20,20); closeX.TextColor3=Color3.fromRGB(255,255,255); closeX.TextSize=10; closeX.Font=Enum.Font.GothamBold; closeX.BorderSizePixel=0; closeX.ZIndex=11; Instance.new("UICorner",closeX)
+        closeX.MouseButton1Click:Connect(function() destroyPet(); destroyPetGui(); activeMode="none"; isActivated=false end)
+
+        local yOff=32
+
+        -- Current state label
+        local stateLbl=Instance.new("TextLabel",panel); stateLbl.Text="STATE: IDLE"; stateLbl.Size=UDim2.new(1,-10,0,14); stateLbl.Position=UDim2.fromOffset(6,yOff); stateLbl.BackgroundTransparency=1; stateLbl.TextColor3=Color3.fromRGB(100,200,100); stateLbl.TextSize=9; stateLbl.Font=Enum.Font.GothamBold; stateLbl.TextXAlignment=Enum.TextXAlignment.Left
+        yOff=yOff+16
+        task.spawn(function()
+            while sg.Parent and petActive do stateLbl.Text="STATE: "..petState:upper().."  |  OWNERS: "..#petOwnerList; task.wait(0.3) end
+        end)
+
+        -- Commands reference
+        local cmdBox=Instance.new("Frame",panel); cmdBox.Size=UDim2.new(1,-12,0,148); cmdBox.Position=UDim2.fromOffset(6,yOff); cmdBox.BackgroundColor3=Color3.fromRGB(5,10,5); cmdBox.BorderSizePixel=0; Instance.new("UICorner",cmdBox).CornerRadius=UDim.new(0,5); Instance.new("UIStroke",cmdBox).Color=Color3.fromRGB(40,100,40)
+        local cmdScroll=Instance.new("ScrollingFrame",cmdBox); cmdScroll.Size=UDim2.new(1,0,1,0); cmdScroll.BackgroundTransparency=1; cmdScroll.BorderSizePixel=0; cmdScroll.ScrollBarThickness=2; cmdScroll.ScrollBarImageColor3=Color3.fromRGB(60,180,60); cmdScroll.CanvasSize=UDim2.fromOffset(0,0); cmdScroll.AutomaticCanvasSize=Enum.AutomaticSize.Y
+        local cmdLay=Instance.new("UIListLayout",cmdScroll); cmdLay.Padding=UDim.new(0,1); Instance.new("UIPadding",cmdScroll).PaddingLeft=UDim.new(0,4)
+        local cmds={
+            "!pet <name> — give pet to player",
+            "!follow — follow owner",
+            "!stay — stay in place",
+            "!dance — random dance",
+            "!orbit — orbit owner",
+            "!orbit <dist> — orbit at distance",
+            "!wall — wall in front",
+            "!split — split between owners",
+            "!ring — ring around owner",
+            "!stop — freeze completely",
+        }
+        for _,cmd in ipairs(cmds) do
+            local l=Instance.new("TextLabel",cmdScroll); l.Text=cmd; l.Size=UDim2.new(1,0,0,14); l.BackgroundTransparency=1
+            l.TextColor3=Color3.fromRGB(100,180,100); l.TextSize=8; l.Font=Enum.Font.Gotham; l.TextXAlignment=Enum.TextXAlignment.Left
+        end
+        yOff=yOff+152
+
+        -- Active owners list
+        local ownerHeader=Instance.new("TextLabel",panel); ownerHeader.Text="OWNERS"; ownerHeader.Size=UDim2.new(1,-10,0,14); ownerHeader.Position=UDim2.fromOffset(6,yOff); ownerHeader.BackgroundTransparency=1; ownerHeader.TextColor3=Color3.fromRGB(80,200,80); ownerHeader.TextSize=9; ownerHeader.Font=Enum.Font.GothamBold; ownerHeader.TextXAlignment=Enum.TextXAlignment.Left
+        yOff=yOff+16
+        local listFrame=Instance.new("ScrollingFrame",panel); listFrame.Size=UDim2.new(1,-12,0,70); listFrame.Position=UDim2.fromOffset(6,yOff); listFrame.BackgroundColor3=Color3.fromRGB(5,10,5); listFrame.BorderSizePixel=0; listFrame.ScrollBarThickness=2; listFrame.ScrollBarImageColor3=Color3.fromRGB(60,180,60); listFrame.CanvasSize=UDim2.fromOffset(0,0); listFrame.AutomaticCanvasSize=Enum.AutomaticSize.Y; Instance.new("UICorner",listFrame).CornerRadius=UDim.new(0,4); Instance.new("UIStroke",listFrame).Color=Color3.fromRGB(40,100,40)
+        Instance.new("UIListLayout",listFrame).Padding=UDim.new(0,1); Instance.new("UIPadding",listFrame).PaddingLeft=UDim.new(0,4)
+        yOff=yOff+74
+
+        -- Remove owner button
+        local remBtn=Instance.new("TextButton",panel); remBtn.Text="REMOVE ALL OWNERS"; remBtn.Size=UDim2.new(1,-12,0,26); remBtn.Position=UDim2.fromOffset(6,yOff); remBtn.BackgroundColor3=Color3.fromRGB(50,12,12); remBtn.TextColor3=Color3.fromRGB(255,80,80); remBtn.TextSize=9; remBtn.Font=Enum.Font.GothamBold; remBtn.BorderSizePixel=0; Instance.new("UICorner",remBtn)
+        remBtn.MouseButton1Click:Connect(function()
+            petOwners={}; petOwnerList={}; petSplitOwners={}
+            petState="idle"; rebuildPetOwnerList(listFrame)
+        end)
+
+        panel.Size=UDim2.fromOffset(W, yOff+32)
+        petGuiUpdateFn=function() rebuildPetOwnerList(listFrame) end
+        rebuildPetOwnerList(listFrame)
+        makeDraggable(titleBar,panel,false)
+
+        -- ── Chat listener ─────────────────────────────────────
+        -- Listen to ALL players' chat so owners can use commands too
+        local function handleCommand(speakerName, msg)
+            local lower=msg:lower():gsub("^%s+","")
+            local isSelf=speakerName==player.Name
+            local isOwner=petOwners[speakerName]
+
+            -- !pet <name>: only the script owner can assign
+            if isSelf then
+                local assignName=lower:match("^!pet%s+(.+)$")
+                if assignName then
+                    assignName=assignName:gsub("%s+$","")
+                    -- Find the player
+                    local found=false
+                    for _,p2 in ipairs(Players:GetPlayers()) do
+                        if p2.Name:lower()==assignName or p2.DisplayName:lower()==assignName then
+                            found=true
+                            if not petOwners[p2.Name] then
+                                petOwners[p2.Name]=true; table.insert(petOwnerList,p2.Name)
+                                -- If 2+ owners, split parts equally
+                                if #petOwnerList>=2 then
+                                    local allParts={}
+                                    for part,_ in pairs(controlled) do if part and part.Parent then table.insert(allParts,part) end end
+                                    petSplitOwners={}
+                                    local perOwner=math.max(1,math.floor(#allParts/#petOwnerList))
+                                    local startIdx=1
+                                    for i,ownerN in ipairs(petOwnerList) do
+                                        local endIdx= (i==#petOwnerList) and #allParts or (startIdx+perOwner-1)
+                                        petSplitOwners[ownerN]={}
+                                        for j=startIdx,endIdx do table.insert(petSplitOwners[ownerN], allParts[j]) end
+                                        startIdx=endIdx+1
+                                    end
+                                else
+                                    petSplitOwners={}
+                                end
+                                rebuildPetOwnerList(listFrame)
+                            end
+                            break
+                        end
+                    end
+                    return
+                end
+            end
+
+            -- Commands usable by owner or self
+            if not (isSelf or isOwner) then return end
+
+            if lower=="!follow"   then petState="follow"
+            elseif lower=="!stay" then petState="stay"
+            elseif lower=="!dance"then petState="dance"; petDanceT=0; petDancePhase=0
+            elseif lower=="!orbit"then petState="orbit"; petOrbitDist=8
+            elseif lower:match("^!orbit%s+(%d+)$") then
+                local d=tonumber(lower:match("^!orbit%s+(%d+)$")); if d then petOrbitDist=d; petState="orbit" end
+            elseif lower=="!wall" then petState="wall"
+            elseif lower=="!ring" then petState="ring"; petOrbitDist=8
+            elseif lower=="!stop" then petState="stop"
+            elseif lower=="!split"then
+                -- Redistribute parts equally among current owners
+                if #petOwnerList>=2 then
+                    local allParts={}
+                    for part,_ in pairs(controlled) do if part and part.Parent then table.insert(allParts,part) end end
+                    petSplitOwners={}
+                    local perOwner=math.max(1,math.floor(#allParts/#petOwnerList))
+                    local si=1
+                    for i2,ownerN in ipairs(petOwnerList) do
+                        local ei=(i2==#petOwnerList) and #allParts or (si+perOwner-1)
+                        petSplitOwners[ownerN]={}
+                        for j=si,ei do table.insert(petSplitOwners[ownerN],allParts[j]) end
+                        si=ei+1
+                    end
+                end
+            end
+        end
+
+        -- Connect to our own chat
+        player.Chatted:Connect(function(msg) if petActive then handleCommand(player.Name,msg) end end)
+
+        -- Connect to all current + future players
+        local function connectPlayer(p2)
+            p2.Chatted:Connect(function(msg) if petActive then handleCommand(p2.Name,msg) end end)
+        end
+        for _,p2 in ipairs(Players:GetPlayers()) do if p2~=player then connectPlayer(p2) end end
+        Players.PlayerAdded:Connect(function(p2) if petActive then connectPlayer(p2) end end)
+    end
     destroyGojoGui=function() if gojoSubGui and gojoSubGui.Parent then gojoSubGui:Destroy()end;gojoSubGui=nil end
     local function createGojoGui()
         destroyGojoGui()
@@ -1630,6 +2000,10 @@ local function main()
         RunService.Stepped:Connect(function(_,dt)
             if not scriptAlive then return end
             snakeT=snakeT+dt; gasterT=gasterT+dt
+            petDanceT=petDanceT+dt
+
+            -- Lock blocks every frame when enabled
+            if lockedBlocks then lockAllNow() end
 
             -- Clean continuous spin
             if spinSpeed~=0 then
@@ -1648,6 +2022,7 @@ local function main()
             if activeMode=="car"          then updateCar(dt) end
             if activeMode=="de_shrine"    then updateDeShrine(dt) end
             if activeMode=="gojo"         then updateGojo(dt,pos) end
+            if activeMode=="pet"           then updatePet(dt,pos) end
 
             table.insert(snakeHistory,1,pos)
             if #snakeHistory>SNAKE_HIST_MAX then table.remove(snakeHistory,SNAKE_HIST_MAX+1) end
@@ -1677,12 +2052,16 @@ local function main()
                 if GOJO_MODES[activeMode] then
                     gojoActive=true; gojoState="idle"; sweepMap(); createGojoGui()
                 else if gojoActive then destroyGojo();destroyGojoGui()end end
+                if PET_MODES[activeMode] then
+                    petActive=true; petState="idle"; petOwners={}; petOwnerList={}; petSplitOwners={}
+                    fullSweep(); createPetGui()
+                else if petActive then destroyPet();destroyPetGui()end end
                 lastMode=activeMode
             end
 
             -- Skip standard loop for special modes with own update
             if not isActivated or activeMode=="none" or partCount==0 then return end
-            if activeMode=="tank" or activeMode=="car" or activeMode=="de_shrine" or activeMode=="gojo" then return end
+            if activeMode=="tank" or activeMode=="car" or activeMode=="de_shrine" or activeMode=="gojo" or activeMode=="pet" then return end
 
             -- Standard formation loop
             local arr={}
@@ -1805,6 +2184,7 @@ local function main()
             {txt="CAR",        mode="car",          col=Color3.fromRGB(80,220,80)},
             {txt="DE SHRINE",  mode="de_shrine",    col=Color3.fromRGB(255,70,50)},
             {txt="GOJO",       mode="gojo",         col=Color3.fromRGB(160,160,255)},
+            {txt="PET MODE",   mode="pet",           col=Color3.fromRGB(80,255,140)},
         }
         local spRows=math.ceil(#spModes/2);local spFrame=Instance.new("Frame",scroll);spFrame.Size=UDim2.new(1,0,0,spRows*28+(spRows-1)*3);spFrame.BackgroundTransparency=1;spFrame.LayoutOrder=10
         local spGL=Instance.new("UIGridLayout",spFrame);spGL.CellSize=UDim2.new(0.5,-3,0,28);spGL.CellPadding=UDim2.fromOffset(3,3);spGL.HorizontalAlignment=Enum.HorizontalAlignment.Left;spGL.SortOrder=Enum.SortOrder.LayoutOrder
@@ -1828,6 +2208,31 @@ local function main()
         end
 
         sLbl2("ACTIONS",11)
+        -- Lock Blocks toggle
+        local lockBtn=Instance.new("TextButton",scroll)
+        lockBtn.Text="🔒 LOCK BLOCKS: OFF"
+        lockBtn.Size=UDim2.new(1,0,0,28)
+        lockBtn.BackgroundColor3=Color3.fromRGB(30,30,50)
+        lockBtn.TextColor3=Color3.fromRGB(140,140,200)
+        lockBtn.TextSize=9; lockBtn.Font=Enum.Font.GothamBold
+        lockBtn.BorderSizePixel=0; lockBtn.LayoutOrder=11
+        Instance.new("UICorner",lockBtn)
+        lockBtn.MouseButton1Click:Connect(function()
+            lockedBlocks=not lockedBlocks
+            if lockedBlocks then
+                lockBtn.Text="🔒 LOCK BLOCKS: ON"
+                lockBtn.BackgroundColor3=Color3.fromRGB(15,55,15)
+                lockBtn.TextColor3=Color3.fromRGB(80,255,100)
+                -- Immediate full enforcement on all current parts
+                lockAllNow()
+            else
+                lockBtn.Text="🔒 LOCK BLOCKS: OFF"
+                lockBtn.BackgroundColor3=Color3.fromRGB(30,30,50)
+                lockBtn.TextColor3=Color3.fromRGB(140,140,200)
+                -- Restore normal BP strength
+                applyStrengthToAll()
+            end
+        end)
         local scanBtn=sBtn3("SCAN PARTS", Color3.fromRGB(18,55,20),Color3.fromRGB(80,255,120),12)
         local relBtn =sBtn3("RELEASE ALL",Color3.fromRGB(55,30,8), Color3.fromRGB(255,155,55),13)
         local deaBtn =sBtn3("DEACTIVATE", Color3.fromRGB(70,8,8),  Color3.fromRGB(255,55,55), 14)
