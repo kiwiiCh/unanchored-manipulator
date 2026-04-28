@@ -327,7 +327,7 @@ local function main()
                 pcall(function()obj:SetNetworkOwner(player)end)  -- claim ownership
                 local p=math.max(1,pullStrength); local d=math.max(50,p*0.05)
                 local bp=Instance.new("BodyPosition"); bp.MaxForce=Vector3.new(1e12,1e12,1e12); bp.P=p; bp.D=d; bp.Position=obj.Position; bp.Parent=obj
-                local bg=Instance.new("BodyGyro"); bg.MaxTorque=Vector3.new(1e12,1e12,1e12); bp.P=p; bg.D=d; bg.CFrame=obj.CFrame; bg.Parent=obj
+                local bg=Instance.new("BodyGyro"); bg.MaxTorque=Vector3.new(1e12,1e12,1e12); bg.P=p; bg.D=d; bg.CFrame=obj.CFrame; bg.Parent=obj
                 controlled[obj]={origCC=origCC,origAnch=origAnch,bp=bp,bg=bg,origColor=obj.Color,origMaterial=obj.Material}
                 partCount=partCount+1
             elseif controlled[obj] then
@@ -337,25 +337,38 @@ local function main()
         end
     end
 
-    -- lockAllNow: maximum-force lock on all controlled parts.
-    -- Called every frame when lockedBlocks=true.
+    -- lockAllNow: called every Stepped frame when lockedBlocks=true.
+    -- Cranks MaxForce to 1e15 (physical maximum) so no player drag can move them.
+    -- If movers were somehow destroyed (e.g. server garbage-collected them),
+    -- re-plants fresh ones so the part is re-locked.
     local function lockAllNow()
         for part, data in pairs(controlled) do
             if part and part.Parent then
-                pcall(function()
-                    part:SetNetworkOwner(player)
-                    part.CanCollide = false
-                    if data.bp and data.bp.Parent then
-                        data.bp.MaxForce = Vector3.new(1e14,1e14,1e14)
-                        data.bp.P = 200000
-                        data.bp.D = 8000
-                    end
-                    if data.bg and data.bg.Parent then
-                        data.bg.MaxTorque = Vector3.new(1e14,1e14,1e14)
-                        data.bg.P = 200000
-                        data.bg.D = 8000
-                    end
-                end)
+            pcall(function()
+                part.CanCollide = false
+                if not (data.bp and data.bp.Parent) then
+                    local bp = Instance.new("BodyPosition")
+                    bp.MaxForce = Vector3.new(1e15,1e15,1e15)
+                    bp.P = 500000; bp.D = 20000
+                    bp.Position = part.Position; bp.Parent = part
+                    data.bp = bp
+                else
+                    data.bp.MaxForce = Vector3.new(1e15,1e15,1e15)
+                    data.bp.P = 500000; data.bp.D = 20000
+                end
+                if not (data.bg and data.bg.Parent) then
+                    local bg = Instance.new("BodyGyro")
+                    bg.MaxTorque = Vector3.new(1e15,1e15,1e15)
+                    bg.P = 500000; bg.D = 20000
+                    bg.CFrame = part.CFrame; bg.Parent = part
+                    data.bg = bg
+                else
+                    data.bg.MaxTorque = Vector3.new(1e15,1e15,1e15)
+                    data.bg.P = 500000; data.bg.D = 20000
+                end
+                part.AssemblyLinearVelocity  = Vector3.zero
+                part.AssemblyAngularVelocity = Vector3.zero
+            end)
             end
         end
     end
@@ -547,7 +560,16 @@ local function main()
         for _,part in ipairs(tks.tankParts)do if part and part.Parent and controlled[part]then releasePart(part,controlled[part]);controlled[part]=nil;partCount=math.max(0,partCount-1)end end
         tks={forward=0,turn=0,hatchOpen=false,insideTank=false,tankBase=nil,turretPart=nil,barrelPart=nil,turretPartIdx=nil,barrelPartIdx=nil,tankParts={},partOffsets={},currentSpeed=0,currentTurnSpeed=0,tankHatch=nil}
         frozenTankCF=nil;tankActive=false;cameraOrbitAngle=0;cameraPitchAngle=math.rad(25)
-        pcall(function()workspace.CurrentCamera.CameraType=Enum.CameraType.Custom end); thawPlayer()
+        pcall(function()workspace.CurrentCamera.CameraType=Enum.CameraType.Custom end)
+        -- Car-pattern restore: unanchor + restore humanoid stats
+        local char=player.Character
+        if char then
+            local hrp=char:FindFirstChild("HumanoidRootPart")
+            local hum=char:FindFirstChildOfClass("Humanoid")
+            if hrp then hrp.Anchored=false end
+            if hum then hum.WalkSpeed=savedWS; hum.JumpPower=savedJP; hum.AutoRotate=savedAR end
+            for _,p in ipairs(char:GetDescendants())do if p:IsA("BasePart")then pcall(function()p.CanCollide=true end)end end
+        end
     end
 
     local function shootProjectile()
@@ -572,14 +594,43 @@ local function main()
     local function toggleHatch()
         if not tks.tankBase then return end
         if not tks.hatchOpen then
-            tks.hatchOpen=true;tks.insideTank=false;frozenTankCF=tks.tankBase.CFrame
-            if tks.tankHatch then pcall(function()tks.tankHatch.CFrame=tks.tankHatch.CFrame*CFrame.new(0,2.5,0)*CFrame.Angles(math.rad(65),0,0)end)end
-            thawPlayer(tks.tankBase.CFrame*CFrame.new(0,TANK_H+4,0))
+            -- OPEN HATCH: exit tank, freeze tank formation
+            tks.hatchOpen=true; tks.insideTank=false
+            frozenTankCF=tks.tankBase.CFrame
+            if tks.tankHatch then pcall(function()
+                tks.tankHatch.CFrame = tks.tankHatch.CFrame*CFrame.new(0,2.5,0)*CFrame.Angles(math.rad(65),0,0)
+            end)end
+            -- Restore player movement (car pattern: just unanchor + reset humanoid)
+            local char=player.Character
+            if char then
+                local hrp=char:FindFirstChild("HumanoidRootPart")
+                local hum=char:FindFirstChildOfClass("Humanoid")
+                if hrp then hrp.Anchored=false; hrp.CFrame=tks.tankBase.CFrame*CFrame.new(0,TANK_H+4,0) end
+                if hum then hum.WalkSpeed=savedWS; hum.JumpPower=savedJP; hum.AutoRotate=savedAR end
+                for _,p in ipairs(char:GetDescendants()) do
+                    if p:IsA("BasePart") then pcall(function()p.CanCollide=true end) end
+                end
+            end
             pcall(function()workspace.CurrentCamera.CameraType=Enum.CameraType.Custom end)
         else
-            tks.hatchOpen=false;tks.insideTank=true;frozenTankCF=nil
-            if tks.tankHatch then pcall(function()tks.tankHatch.CFrame=tks.tankHatch.CFrame*CFrame.Angles(math.rad(-65),0,0)*CFrame.new(0,-2.5,0)end)end
-            freezePlayer(tks.tankBase.CFrame*CFrame.new(0,TANK_INTERIOR_Y,0))
+            -- CLOSE HATCH: enter tank, anchor player like car does
+            tks.hatchOpen=false; tks.insideTank=true; frozenTankCF=nil
+            if tks.tankHatch then pcall(function()
+                tks.tankHatch.CFrame = tks.tankHatch.CFrame*CFrame.Angles(math.rad(-65),0,0)*CFrame.new(0,-2.5,0)
+            end)end
+            local char=player.Character
+            if char then
+                local hrp=char:FindFirstChild("HumanoidRootPart")
+                local hum=char:FindFirstChildOfClass("Humanoid")
+                if hrp then
+                    hrp.Anchored=true
+                    hrp.CFrame=tks.tankBase.CFrame*CFrame.new(0,TANK_INTERIOR_Y,0)
+                end
+                if hum then hum.WalkSpeed=0; hum.JumpPower=0 end
+                for _,p in ipairs(char:GetDescendants()) do
+                    if p:IsA("BasePart") then pcall(function()p.CanCollide=false end) end
+                end
+            end
         end
     end
 
@@ -632,8 +683,26 @@ local function main()
         local char=player.Character
         if char then
             local hrp=char:FindFirstChild("HumanoidRootPart")
-            if hrp and hrp.Anchored then pcall(function()hrp.CFrame=newCF*CFrame.new(0,TANK_INTERIOR_Y,0)end)end
-            for _,p in ipairs(char:GetDescendants())do if p:IsA("BasePart")then pcall(function()p.CanCollide=false end)end end
+            -- TANK FIX: Match car pattern exactly.
+            -- Anchor HRP, set CFrame directly, keep noclip every frame.
+            -- Do NOT fight the Humanoid with PlatformStanding - just anchor.
+            if hrp then
+                if not hrp.Anchored then hrp.Anchored = true end
+                pcall(function()
+                    hrp.CFrame = newCF * CFrame.new(0, TANK_INTERIOR_Y, 0)
+                    hrp.AssemblyLinearVelocity  = Vector3.zero
+                    hrp.AssemblyAngularVelocity = Vector3.zero
+                end)
+            end
+            for _,p in ipairs(char:GetDescendants()) do
+                if p:IsA("BasePart") then pcall(function() p.CanCollide=false end) end
+            end
+            -- Keep Humanoid in a passive state (no jumping/walking forces)
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum then
+                if hum.WalkSpeed ~= 0  then hum.WalkSpeed  = 0 end
+                if hum.JumpPower ~= 0  then hum.JumpPower  = 0 end
+            end
         end
         pcall(function()
             workspace.CurrentCamera.CameraType=Enum.CameraType.Scriptable
@@ -1501,7 +1570,7 @@ local function main()
         doorBtn.MouseButton1Click:Connect(function()toggleCarDoor();if cs.doorOpen then doorBtn.Text="🚪 CLOSE DOOR";sLbl.Text="DRIVING  |  INSIDE";sLbl.TextColor3=Color3.fromRGB(100,230,100) else doorBtn.Text="🚪 OPEN DOOR";sLbl.Text="PARKED  |  OPEN DOOR";sLbl.TextColor3=Color3.fromRGB(180,180,100)end end)
         destBtn.MouseButton1Click:Connect(function()task.spawn(function()destroyCar();destroyCarGui()end)end)
 
-        -- Drive joystick (left side, large)
+        -- Drive joystick (left side, large, sensitive)
         local jR2=carJoy.radius
         local jBase2=Instance.new("Frame",sg)
         jBase2.Name="CarJoyBase"
@@ -1510,10 +1579,7 @@ local function main()
         jBase2.BackgroundColor3=Color3.fromRGB(30,60,30)
         jBase2.BackgroundTransparency=0.3
         jBase2.BorderSizePixel=0
-        -- IMPORTANT: Active=false so GuiObject does NOT consume touch events
-        -- This prevents the touch from being flagged as "processed=true" in
-        -- UserInputService.TouchStarted, which was silently blocking the joystick.
-        jBase2.Active=false
+        jBase2.Active=false  -- transparent to UI system; we detect touch by position below
         Instance.new("UICorner",jBase2).CornerRadius=UDim.new(1,0)
         local jStk2=Instance.new("UIStroke",jBase2);jStk2.Color=Color3.fromRGB(60,180,60);jStk2.Thickness=2
         local jDLbl=Instance.new("TextLabel",jBase2);jDLbl.Text="DRIVE";jDLbl.Size=UDim2.new(1,0,0,16);jDLbl.Position=UDim2.new(0,0,0,4);jDLbl.BackgroundTransparency=1;jDLbl.TextColor3=Color3.fromRGB(100,220,100);jDLbl.TextSize=9;jDLbl.Font=Enum.Font.GothamBold;jDLbl.ZIndex=5
@@ -1526,17 +1592,19 @@ local function main()
             else jThumb2.Position=UDim2.new(0.5,-18,0.5,-18) end
         end
 
-        -- ▶ KEY FIX: Use jBase2.InputBegan (frame's OWN input event) instead of
-        --   UserInputService.TouchStarted. Frame InputBegan fires regardless of
-        --   the "processed" flag, so the touch ALWAYS registers.
-        jBase2.InputBegan:Connect(function(inp)
-            if inp.UserInputType~=Enum.UserInputType.Touch then return end
+        -- JOYSTICK FIX: Ignore `processed` flag entirely.
+        -- Do our own position check so the touch always registers even if
+        -- Roblox's UI system already flagged it as consumed.
+        local conCTS=UserInputService.TouchStarted:Connect(function(touch, _)
             if not cs.doorOpen then return end
-            local pos=Vector2.new(inp.Position.X,inp.Position.Y)
-            carJoy.active=true; carJoy.origin=pos; carJoy.current=pos; carJoy.touchId=inp
+            local pos=Vector2.new(touch.Position.X, touch.Position.Y)
+            -- Wait one frame for AbsolutePosition to be valid on first open
+            local jcx = jBase2.AbsolutePosition.X + jBase2.AbsoluteSize.X/2
+            local jcy = jBase2.AbsolutePosition.Y + jBase2.AbsoluteSize.Y/2
+            if (pos - Vector2.new(jcx, jcy)).Magnitude < jR2 * 1.9 then
+                carJoy.active=true; carJoy.origin=pos; carJoy.current=pos; carJoy.touchId=touch
+            end
         end)
-
-        -- TouchMoved/Ended still use UserInputService (they fire on the touch ID regardless)
         local conCTM=UserInputService.TouchMoved:Connect(function(touch,_)
             if not carJoy.active or carJoy.touchId~=touch then return end
             local pos=Vector2.new(touch.Position.X,touch.Position.Y); carJoy.current=pos
@@ -1550,7 +1618,7 @@ local function main()
         -- KB
         local conCKBB=UserInputService.InputBegan:Connect(function(inp,proc)if proc or not cs.doorOpen then return end;if inp.KeyCode==Enum.KeyCode.W then carJoy.forward=1 elseif inp.KeyCode==Enum.KeyCode.S then carJoy.forward=-1 elseif inp.KeyCode==Enum.KeyCode.A then carJoy.turn=-1 elseif inp.KeyCode==Enum.KeyCode.D then carJoy.turn=1 end end)
         local conCKBE=UserInputService.InputEnded:Connect(function(inp,_)if inp.KeyCode==Enum.KeyCode.W or inp.KeyCode==Enum.KeyCode.S then carJoy.forward=0 elseif inp.KeyCode==Enum.KeyCode.A or inp.KeyCode==Enum.KeyCode.D then carJoy.turn=0 end end)
-        sg.AncestryChanged:Connect(function(_,par)if not par then pcall(function()conCTM:Disconnect()end);pcall(function()conCTE:Disconnect()end);pcall(function()conCKBB:Disconnect()end);pcall(function()conCKBE:Disconnect()end);carJoy.forward=0;carJoy.turn=0;carJoy.active=false end end)
+        sg.AncestryChanged:Connect(function(_,par)if not par then pcall(function()conCTS:Disconnect()end);pcall(function()conCTM:Disconnect()end);pcall(function()conCTE:Disconnect()end);pcall(function()conCKBB:Disconnect()end);pcall(function()conCKBE:Disconnect()end);carJoy.forward=0;carJoy.turn=0;carJoy.active=false end end)
         makeDraggable(titleBar,panel,false)
     end
 
@@ -1633,12 +1701,23 @@ local function main()
                 local data=controlled[part]; if not(data and data.bp and data.bp.Parent) then return end
                 local tgt
 
-                if mode2=="follow" or mode2=="stay" then
+                if mode2=="follow" then
                     -- Hover in a small sphere cluster around target
-                    local phi=(1+math.sqrt(5))/2; local i2=i-1; local s=math.max(n,1)
-                    local theta=math.acos(math.clamp(1-2*(i2+0.5)/s,-1,1)); local ang=2*math.pi*i2/phi
+                    local phi2=(1+math.sqrt(5))/2; local i2=i-1; local s=math.max(n,1)
+                    local theta2=math.acos(math.clamp(1-2*(i2+0.5)/s,-1,1)); local ang2=2*math.pi*i2/phi2
                     local r=1.5+math.floor(i/10)*1.2
-                    tgt=targetPos+Vector3.new(r*math.sin(theta)*math.cos(ang),r*math.sin(theta)*math.sin(ang)+2,r*math.cos(theta))
+                    tgt=targetPos+Vector3.new(r*math.sin(theta2)*math.cos(ang2),r*math.sin(theta2)*math.sin(ang2)+2,r*math.cos(theta2))
+
+                elseif mode2=="stay" then
+                    -- Lock BP.Position to where the part currently is, don't move it
+                    data.bp.P=200000; data.bp.D=8000
+                    data.bp.MaxForce=Vector3.new(1e13,1e13,1e13)
+                    -- Only update once (keep its existing target); skip setting tgt
+                    -- We do NOT update data.bp.Position so it holds its last set pos
+                    part.AssemblyLinearVelocity=Vector3.zero
+                    part.AssemblyAngularVelocity=Vector3.zero
+                    -- Do nothing further for this part
+                    tgt=nil  -- skip tgt assignment below
 
                 elseif mode2=="orbit" then
                     local ang2=orbitT*1.5+i*(math.pi*2/n)
@@ -1674,8 +1753,12 @@ local function main()
                     end
 
                 elseif mode2=="stop" then
-                    -- Stay exactly where they are
-                    tgt=part.Position
+                    -- Zero velocity and hold current world position
+                    part.AssemblyLinearVelocity=Vector3.zero
+                    part.AssemblyAngularVelocity=Vector3.zero
+                    data.bp.P=200000; data.bp.D=8000
+                    data.bp.MaxForce=Vector3.new(1e13,1e13,1e13)
+                    tgt=part.Position  -- keep exactly where it is
 
                 else -- default hover above
                     tgt=targetPos+Vector3.new(0,4,0)
@@ -1805,42 +1888,44 @@ local function main()
         rebuildPetOwnerList(listFrame)
         makeDraggable(titleBar,panel,false)
 
-        -- ── Chat listener ─────────────────────────────────────
-        -- Listen to ALL players' chat so owners can use commands too
-        local function handleCommand(speakerName, msg)
-            local lower=msg:lower():gsub("^%s+","")
-            local isSelf=speakerName==player.Name
-            local isOwner=petOwners[speakerName]
+        -- Chat listener: per-owner individual commands
+        -- Each owner can only control THEIR OWN assigned parts.
+        local petOwnerStates = {}
 
-            -- !pet <name>: only the script owner can assign
+        local function redistributeParts()
+            local allParts={}
+            for part,_ in pairs(controlled) do if part and part.Parent then table.insert(allParts,part) end end
+            petSplitOwners={}
+            if #petOwnerList>=2 then
+                local perOwner=math.max(1,math.floor(#allParts/#petOwnerList))
+                local si=1
+                for ii,ownerN in ipairs(petOwnerList) do
+                    local ei=(ii==#petOwnerList) and #allParts or (si+perOwner-1)
+                    petSplitOwners[ownerN]={}
+                    for j=si,ei do table.insert(petSplitOwners[ownerN],allParts[j]) end
+                    si=ei+1
+                end
+            end
+            rebuildPetOwnerList(listFrame)
+        end
+
+        local function handleCommand(speakerName, msg)
+            if not petActive then return end
+            local lower=msg:lower():gsub("^%s+",""):gsub("%s+$","")
+            local isSelf   = (speakerName == player.Name)
+            local isOwner  = petOwners[speakerName]
+
+            -- Only script owner can assign pets
             if isSelf then
-                local assignName=lower:match("^!pet%s+(.+)$")
+                local assignName = lower:match("^!pet%s+(.+)$")
                 if assignName then
-                    assignName=assignName:gsub("%s+$","")
-                    -- Find the player
-                    local found=false
                     for _,p2 in ipairs(Players:GetPlayers()) do
                         if p2.Name:lower()==assignName or p2.DisplayName:lower()==assignName then
-                            found=true
                             if not petOwners[p2.Name] then
-                                petOwners[p2.Name]=true; table.insert(petOwnerList,p2.Name)
-                                -- If 2+ owners, split parts equally
-                                if #petOwnerList>=2 then
-                                    local allParts={}
-                                    for part,_ in pairs(controlled) do if part and part.Parent then table.insert(allParts,part) end end
-                                    petSplitOwners={}
-                                    local perOwner=math.max(1,math.floor(#allParts/#petOwnerList))
-                                    local startIdx=1
-                                    for i,ownerN in ipairs(petOwnerList) do
-                                        local endIdx= (i==#petOwnerList) and #allParts or (startIdx+perOwner-1)
-                                        petSplitOwners[ownerN]={}
-                                        for j=startIdx,endIdx do table.insert(petSplitOwners[ownerN], allParts[j]) end
-                                        startIdx=endIdx+1
-                                    end
-                                else
-                                    petSplitOwners={}
-                                end
-                                rebuildPetOwnerList(listFrame)
+                                petOwners[p2.Name]=true
+                                table.insert(petOwnerList, p2.Name)
+                                petOwnerStates[p2.Name]="follow"
+                                redistributeParts()
                             end
                             break
                         end
@@ -1849,45 +1934,62 @@ local function main()
                 end
             end
 
-            -- Commands usable by owner or self
             if not (isSelf or isOwner) then return end
 
-            if lower=="!follow"   then petState="follow"
-            elseif lower=="!stay" then petState="stay"
-            elseif lower=="!dance"then petState="dance"; petDanceT=0; petDancePhase=0
-            elseif lower=="!orbit"then petState="orbit"; petOrbitDist=8
-            elseif lower:match("^!orbit%s+(%d+)$") then
-                local d=tonumber(lower:match("^!orbit%s+(%d+)$")); if d then petOrbitDist=d; petState="orbit" end
-            elseif lower=="!wall" then petState="wall"
-            elseif lower=="!ring" then petState="ring"; petOrbitDist=8
-            elseif lower=="!stop" then petState="stop"
-            elseif lower=="!split"then
-                -- Redistribute parts equally among current owners
-                if #petOwnerList>=2 then
-                    local allParts={}
-                    for part,_ in pairs(controlled) do if part and part.Parent then table.insert(allParts,part) end end
-                    petSplitOwners={}
-                    local perOwner=math.max(1,math.floor(#allParts/#petOwnerList))
-                    local si=1
-                    for i2,ownerN in ipairs(petOwnerList) do
-                        local ei=(i2==#petOwnerList) and #allParts or (si+perOwner-1)
-                        petSplitOwners[ownerN]={}
-                        for j=si,ei do table.insert(petSplitOwners[ownerN],allParts[j]) end
-                        si=ei+1
+            -- Determine whose parts to affect
+            local targetOwner = speakerName
+            -- Script owner with no assigned owners: control all parts globally
+            if isSelf and #petOwnerList == 0 then
+                if lower=="!follow" then petState="follow"
+                elseif lower=="!stay" then
+                    for part,data in pairs(controlled) do
+                        if part and part.Parent and data.bp and data.bp.Parent then
+                            data.bp.Position=part.Position
+                        end
+                    end
+                    petState="stay"
+                elseif lower=="!dance" then petState="dance"; petDanceT=0
+                elseif lower=="!orbit" then petState="orbit"; petOrbitDist=8
+                elseif lower:match("^!orbit%s+(%d+)$") then
+                    local d=tonumber(lower:match("^!orbit%s+(%d+)$"))
+                    if d then petOrbitDist=d; petState="orbit" end
+                elseif lower=="!wall" then petState="wall"
+                elseif lower=="!ring" then petState="ring"; petOrbitDist=8
+                elseif lower=="!stop" then petState="stop"
+                end
+                return
+            end
+
+            -- Per-owner: only affects this owner's assigned parts
+            if not petOwnerStates[targetOwner] then return end
+            if lower=="!follow" then petOwnerStates[targetOwner]="follow"
+            elseif lower=="!stay" then
+                local parts = petSplitOwners[targetOwner] or {}
+                for _,part in ipairs(parts) do
+                    local data=controlled[part]
+                    if data and data.bp and data.bp.Parent then
+                        data.bp.Position=part.Position
                     end
                 end
+                petOwnerStates[targetOwner]="stay"
+            elseif lower=="!dance" then petOwnerStates[targetOwner]="dance"; petDanceT=0
+            elseif lower=="!orbit" then petOwnerStates[targetOwner]="orbit"
+            elseif lower:match("^!orbit%s+(%d+)$") then
+                local d=tonumber(lower:match("^!orbit%s+(%d+)$"))
+                if d then petOwnerStates[targetOwner]="orbit"; petOrbitDist=d end
+            elseif lower=="!wall" then petOwnerStates[targetOwner]="wall"
+            elseif lower=="!ring" then petOwnerStates[targetOwner]="ring"
+            elseif lower=="!stop" then petOwnerStates[targetOwner]="stop"
+            elseif lower=="!split" then redistributeParts()
             end
         end
 
-        -- Connect to our own chat
-        player.Chatted:Connect(function(msg) if petActive then handleCommand(player.Name,msg) end end)
-
-        -- Connect to all current + future players
-        local function connectPlayer(p2)
-            p2.Chatted:Connect(function(msg) if petActive then handleCommand(p2.Name,msg) end end)
+        player.Chatted:Connect(function(msg) handleCommand(player.Name,msg) end)
+        local function connectPlayerChat(p2)
+            p2.Chatted:Connect(function(msg) handleCommand(p2.Name,msg) end)
         end
-        for _,p2 in ipairs(Players:GetPlayers()) do if p2~=player then connectPlayer(p2) end end
-        Players.PlayerAdded:Connect(function(p2) if petActive then connectPlayer(p2) end end)
+        for _,p2 in ipairs(Players:GetPlayers()) do if p2~=player then connectPlayerChat(p2) end end
+        Players.PlayerAdded:Connect(connectPlayerChat)
     end
     destroyGojoGui=function() if gojoSubGui and gojoSubGui.Parent then gojoSubGui:Destroy()end;gojoSubGui=nil end
     local function createGojoGui()
@@ -2037,7 +2139,18 @@ local function main()
                 if TANK_MODES[activeMode] then
                     tankActive=true;cameraOrbitAngle=0;cameraPitchAngle=math.rad(25);createTankGui()
                     local ok=buildTankFromParts(pos,cf)
-                    if ok then tks.insideTank=true;tks.hatchOpen=false;freezePlayer(tks.tankBase.CFrame*CFrame.new(0,TANK_INTERIOR_Y,0))end
+                    if ok then
+                        tks.insideTank=true; tks.hatchOpen=false
+                        -- Car-pattern entry: anchor HRP directly
+                        local char=player.Character
+                        if char then
+                            local hrp=char:FindFirstChild("HumanoidRootPart")
+                            local hum=char:FindFirstChildOfClass("Humanoid")
+                            if hrp then hrp.Anchored=true; hrp.CFrame=tks.tankBase.CFrame*CFrame.new(0,TANK_INTERIOR_Y,0) end
+                            if hum then savedWS=hum.WalkSpeed;savedJP=hum.JumpPower;savedAR=hum.AutoRotate;hum.WalkSpeed=0;hum.JumpPower=0 end
+                            for _,p in ipairs(char:GetDescendants())do if p:IsA("BasePart")then pcall(function()p.CanCollide=false end)end end
+                        end
+                    end
                 else if tankActive then destroyTank();destroyTankGui()end end
                 if CAR_MODES[activeMode] then
                     carActive=true;createCarGui()
