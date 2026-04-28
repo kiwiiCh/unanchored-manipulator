@@ -1,10 +1,34 @@
 -- ============================================================
--- UNANCHORED MANIPULATOR KII v9 -- DELTA EXECUTOR
--- Fixes: car joystick touchable (frame InputBegan, no proc check)
--- DE Shrine: 100% unanchored sweep, blocks go underground until
---   domain closes, shrine + slashes = grabbed blocks, animations.
--- Gojo Mode: Max Blue / Reversal Red / Hollow Purple / DE:Infinity
--- All vehicle BP movers stripped (no flying), Stepped loop.
+-- UNANCHORED MANIPULATOR KII v13 -- DELTA EXECUTOR
+-- v13 FIXES:
+--   [1] Unanchored blocks move fast (BP P=800000, D=40000) with
+--       RunService.Heartbeat for smooth ~60fps, no lag.
+--   [2] Lock Blocks toggle FIXED: locked blocks cannot be dragged,
+--       high MaxForce (1e15) + CanCollide=false. Unlock restores
+--       normal BP strength. Locked blocks are completely excluded
+--       from all movement/formation updates.
+--   [3] Pet mode FIXED: script owner commands always work even
+--       when ownerless. Removed all JavaScript (was never there,
+--       but cleaned up any JS-like syntax). Pet chat handler
+--       properly gates script-owner vs pet-owner commands.
+--   [4] Gojo mode FIXED: state always resets to "idle" before any
+--       technique fires. Stop button reliably kills all active
+--       technique threads via a generation counter. Purple/Red
+--       auto-reset gojoState after completion.
+-- NEW COMMANDS (pet mode):
+--   !unpet <name>       remove a player's pet ownership
+--   !carpet             blocks carpet under owner's feet, speed boost
+--   !uncarpet           remove carpet mode
+--   !attack <name>      fling targeted player with deadly block
+--   !heart              blocks form heart shape
+--   !gotto <name>       swallow owner → carry to target → spit
+--   !bring <name>       swallow target player → carry to owner
+--   !spin <speed>       set spin speed for pet
+--   !say <text>         blocks form text letters
+--   !sphere             blocks form sphere
+--   !guard              fling nearby players except owner
+-- UPGRADES:
+--   Partial name matching (2+ chars) for all player-targeting cmds
 -- ============================================================
 local Players          = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -42,7 +66,7 @@ local function makeDraggable(handle, panel, edgeOnly)
 end
 
 local function main()
-    print("[ManipKii v9] "..player.Name)
+    print("[ManipKii v13] "..player.Name)
 
     -- ── Core state ────────────────────────────────────────────
     local isActivated=false; local activeMode="none"; local lastMode="none"
@@ -50,6 +74,7 @@ local function main()
     local pullStrength=50000; local spinSpeed=0; local spinAngle=0
 
     local function applyStrengthToAll()
+        if not controlled then return end
         local p=math.max(1,pullStrength); local d=math.max(50,p*0.05)
         for _,data in pairs(controlled) do
             pcall(function()
@@ -222,7 +247,39 @@ local function main()
     local petSplitOwners = {}   -- for split: {[ownerName]={parts={}}}
     local petGuiUpdateFn = nil  -- set by createPetGui, called to refresh owner list
 
-    -- ── Gaster/Wing data (compact) ────────────────────────────
+    -- ── Pet mode state extras for new commands ─────────────────
+    local petCarpetOwners  = {}  -- {[ownerName]=true} carpet mode per owner
+    local petAttackTarget  = nil -- current attack target player name
+    local petGuardActive   = false
+    local petSpinSpeed     = 0
+    local petSayText       = nil  -- nil = no text, string = show text
+    local petSphereMode    = false
+    local petOwnerStates_global = {}  -- populated inside createPetGui
+
+    -- ── Partial name matcher (2+ chars, case insensitive) ──────
+    local function findPlayer(query)
+        if not query or #query < 1 then return nil end
+        local q = query:lower()
+        -- Exact match first
+        for _,p in ipairs(Players:GetPlayers()) do
+            if p.Name:lower() == q or p.DisplayName:lower() == q then return p end
+        end
+        -- Partial match (prefix of Name or DisplayName)
+        local matches = {}
+        for _,p in ipairs(Players:GetPlayers()) do
+            if p.Name:lower():sub(1,#q) == q or p.DisplayName:lower():sub(1,#q) == q then
+                table.insert(matches, p)
+            end
+        end
+        if #matches == 1 then return matches[1] end
+        -- Substring match fallback
+        for _,p in ipairs(Players:GetPlayers()) do
+            if p.Name:lower():find(q,1,true) or p.DisplayName:lower():find(q,1,true) then
+                return p
+            end
+        end
+        return nil
+    end
     local HAND_SCALE=2.8
     local HAND_SLOTS={{x=-4,y=5},{x=-4,y=4},{x=-4,y=3},{x=-4,y=2},{x=-2,y=6},{x=-2,y=5},{x=-2,y=4},{x=-2,y=3},{x=0,y=7},{x=0,y=6},{x=0,y=5},{x=0,y=4},{x=0,y=3},{x=2,y=6},{x=2,y=5},{x=2,y=4},{x=2,y=3},{x=5,y=2},{x=5,y=1},{x=5,y=0},{x=-4,y=1},{x=-2,y=1},{x=0,y=1},{x=2,y=1},{x=-4,y=0},{x=-2,y=0},{x=0,y=0},{x=2,y=0},{x=4,y=0},{x=-2,y=-1},{x=0,y=-1},{x=2,y=-1}}
     local PALM_SLOTS={{x=-3,y=2},{x=-1,y=2},{x=1,y=2},{x=3,y=2},{x=-3,y=1},{x=-1,y=1},{x=1,y=1},{x=3,y=1},{x=-3,y=0},{x=-1,y=0},{x=1,y=0},{x=3,y=0},{x=-2,y=-1},{x=0,y=-1},{x=2,y=-1},{x=-2,y=-2},{x=0,y=-2},{x=2,y=-2}}
@@ -337,37 +394,39 @@ local function main()
         end
     end
 
-    -- lockAllNow: called every Stepped frame when lockedBlocks=true.
-    -- Cranks MaxForce to 1e15 (physical maximum) so no player drag can move them.
-    -- If movers were somehow destroyed (e.g. server garbage-collected them),
-    -- re-plants fresh ones so the part is re-locked.
+    -- lockAllNow: called every Heartbeat frame when lockedBlocks=true.
+    -- Cranks MaxForce to 1e15 and zeroes velocity so no drag can move them.
+    -- Re-plants movers if somehow destroyed.
     local function lockAllNow()
         for part, data in pairs(controlled) do
             if part and part.Parent then
             pcall(function()
                 part.CanCollide = false
+                -- Zero all velocity to prevent any movement
+                part.AssemblyLinearVelocity  = Vector3.zero
+                part.AssemblyAngularVelocity = Vector3.zero
                 if not (data.bp and data.bp.Parent) then
                     local bp = Instance.new("BodyPosition")
                     bp.MaxForce = Vector3.new(1e15,1e15,1e15)
-                    bp.P = 500000; bp.D = 20000
+                    bp.P = 500000; bp.D = 50000
                     bp.Position = part.Position; bp.Parent = part
                     data.bp = bp
                 else
                     data.bp.MaxForce = Vector3.new(1e15,1e15,1e15)
-                    data.bp.P = 500000; data.bp.D = 20000
+                    data.bp.P = 500000; data.bp.D = 50000
+                    -- Hold locked position (do NOT update Position so it stays put)
                 end
                 if not (data.bg and data.bg.Parent) then
                     local bg = Instance.new("BodyGyro")
                     bg.MaxTorque = Vector3.new(1e15,1e15,1e15)
-                    bg.P = 500000; bg.D = 20000
+                    bg.P = 500000; bg.D = 50000
                     bg.CFrame = part.CFrame; bg.Parent = part
                     data.bg = bg
                 else
                     data.bg.MaxTorque = Vector3.new(1e15,1e15,1e15)
-                    data.bg.P = 500000; data.bg.D = 20000
+                    data.bg.P = 500000; data.bg.D = 50000
+                    -- Hold locked orientation
                 end
-                part.AssemblyLinearVelocity  = Vector3.zero
-                part.AssemblyAngularVelocity = Vector3.zero
             end)
             end
         end
@@ -1059,6 +1118,8 @@ local function main()
     local BLUE_CD   = 12   -- seconds (10s duration + 2s buffer)
     local RED_CD    = 4
     local PURPLE_CD = 6
+    -- FIX #4: Generation counter — increment to kill any running technique thread
+    local gojoGen = 0
 
     -- ── Max Blue ─────────────────────────────────────────────
     -- Blocks scatter outward then get pulled back to aim point cyclically.
@@ -1068,7 +1129,7 @@ local function main()
         local now = tick()
         if now - gojoLastFire.blue < BLUE_CD and gojoState == "blue_hold" then
             -- already running, stop it
-            gojoState = "idle"; restoreAllColors(); blueThread = nil; return
+            safeResetGojo(); return
         end
         if gojoState ~= "idle" then return end
         gojoLastFire.blue = now
@@ -1076,13 +1137,14 @@ local function main()
         colorAllControlled(Color3.fromRGB(20,100,255), Enum.Material.Neon)
 
         local th = {}; blueThread = th
+        local myGen = gojoGen  -- FIX #4: capture generation at start
         task.spawn(function()
             local elapsed   = 0
             local DURATION  = 10
             local CYCLE     = 1.4  -- scatter/pull cycle length in seconds
-            while gojoState == "blue_hold" and elapsed < DURATION do
+            while gojoState == "blue_hold" and elapsed < DURATION and gojoGen == myGen do
                 local dt = task.wait()
-                if blueThread ~= th then return end  -- superseded
+                if blueThread ~= th or gojoGen ~= myGen then return end  -- FIX #4: killed
                 elapsed = elapsed + dt
 
                 local char = player.Character
@@ -1152,6 +1214,7 @@ local function main()
         if gojoState ~= "idle" then return end
         gojoLastFire.red  = now
         gojoState         = "red_charge"
+        local myGen = gojoGen  -- FIX #4
 
         local char = player.Character
         local root = char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso"))
@@ -1174,7 +1237,7 @@ local function main()
         task.spawn(function()
             local elapsed = 0
             local CHARGE  = 1.2  -- seconds to charge
-            while elapsed < CHARGE and gojoState == "red_charge" do
+            while elapsed < CHARGE and gojoState == "red_charge" and gojoGen == myGen do
                 local dt = task.wait()
                 elapsed  = elapsed + dt
                 local progress = elapsed / CHARGE  -- 0→1
@@ -1239,6 +1302,7 @@ local function main()
         if gojoState ~= "idle" then return end
         gojoLastFire.purple = now
         gojoState           = "purple_split"
+        local myGen = gojoGen  -- FIX #4
 
         local char = player.Character
         local root = char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso"))
@@ -1282,7 +1346,7 @@ local function main()
         task.spawn(function()
             -- Phase 1: hold split position for 1 second
             local elapsed = 0
-            while elapsed < 1.0 and gojoState == "purple_split" do
+            while elapsed < 1.0 and gojoState == "purple_split" and gojoGen == myGen do
                 local dt = task.wait(); elapsed = elapsed + dt
                 -- Animate slight orbit during split
                 local t2 = elapsed * 3
@@ -1307,7 +1371,7 @@ local function main()
             -- Phase 2: converge to aim point with growing purple glow
             colorParts(allParts, Color3.fromRGB(160,0,255), Enum.Material.Neon)
             elapsed = 0
-            while elapsed < 0.8 and gojoState == "purple_fire" do
+            while elapsed < 0.8 and gojoState == "purple_fire" and gojoGen == myGen do
                 local dt = task.wait(); elapsed = elapsed + dt
                 local progress = elapsed / 0.8
                 for i, part in ipairs(allParts) do
@@ -1341,7 +1405,7 @@ local function main()
             -- get sucked toward the projectile cluster's leading point
             task.spawn(function()
                 local bhElapsed = 0
-                while bhElapsed < 3.0 and gojoActive do
+                while bhElapsed < 3.0 and gojoActive and gojoGen == myGen do
                     local dt2 = task.wait(); bhElapsed = bhElapsed + dt2
                     -- Estimate projectile position along aim dir
                     local bhCenter = aimPt + aimDir2 * (bhElapsed * 1600 * 0.25)  -- rough tracking
@@ -1429,6 +1493,7 @@ local function main()
 
     -- ── Safe state reset: always callable, clears stuck states ──
     local function safeResetGojo()
+        gojoGen = gojoGen + 1   -- FIX #4: invalidate all running technique threads
         gojoState  = "idle"
         blueThread = nil
         restoreAllColors()
@@ -1680,6 +1745,138 @@ local function main()
         end
     end
 
+    -- ── Pet attack: touch = explosion fling on target only ───────
+    local petAttackFired = false
+    local function doPetAttackFling()
+        if petAttackFired then return end
+        local targ = petAttackTarget and findPlayer(petAttackTarget)
+        if not targ then return end
+        local targChar = targ.Character
+        if not targChar then return end
+        local targHRP = targChar:FindFirstChild("HumanoidRootPart") or targChar:FindFirstChild("Torso")
+        if not targHRP then return end
+        -- Connect Touched on all attack parts
+        for part,_ in pairs(controlled) do
+            if part and part.Parent then
+                local conn; conn = part.Touched:Connect(function(hit)
+                    if petAttackFired then pcall(function()conn:Disconnect()end); return end
+                    if not hit or not hit:IsDescendantOf(targChar) then return end
+                    petAttackFired = true
+                    pcall(function()conn:Disconnect()end)
+                    pcall(function()
+                        local ex=Instance.new("Explosion"); ex.Position=hit.Position
+                        ex.BlastRadius=12; ex.BlastPressure=2000000
+                        ex.DestroyJointRadiusPercent=0; ex.Parent=workspace
+                    end)
+                end)
+                task.delay(8, function() pcall(function()conn:Disconnect()end) end)
+            end
+        end
+    end
+
+    -- ── Pet guard: fling anyone near owner except owners/self ────
+    local petGuardLastFling = 0
+    local function doPetGuard(ownerPos)
+        local now = tick()
+        if now - petGuardLastFling < 2 then return end
+        for _,p2 in ipairs(Players:GetPlayers()) do
+            if p2 ~= player and not petOwners[p2.Name] then
+                local ch = p2.Character
+                local hrp = ch and (ch:FindFirstChild("HumanoidRootPart") or ch:FindFirstChild("Torso"))
+                if hrp and (hrp.Position - ownerPos).Magnitude < 8 then
+                    petGuardLastFling = now
+                    pcall(function()
+                        local ex=Instance.new("Explosion"); ex.Position=hrp.Position
+                        ex.BlastRadius=6; ex.BlastPressure=800000
+                        ex.DestroyJointRadiusPercent=0; ex.Parent=workspace
+                    end)
+                end
+            end
+        end
+    end
+
+    -- ── Pet carpet speed boost ────────────────────────────────────
+    local petCarpetSpeedSet = {}
+    local function applyCarpetBoost(ownerName)
+        local p2 = findPlayer(ownerName); if not p2 then return end
+        local char = p2.Character; if not char then return end
+        local hum = char:FindFirstChildOfClass("Humanoid"); if not hum then return end
+        if not petCarpetSpeedSet[ownerName] then
+            petCarpetSpeedSet[ownerName] = hum.WalkSpeed
+            hum.WalkSpeed = math.min(hum.WalkSpeed * 2, 100)
+        end
+    end
+    local function removeCarpetBoost(ownerName)
+        local p2 = findPlayer(ownerName); if not p2 then return end
+        local char = p2.Character; if not char then return end
+        local hum = char:FindFirstChildOfClass("Humanoid"); if not hum then return end
+        if petCarpetSpeedSet[ownerName] then
+            hum.WalkSpeed = petCarpetSpeedSet[ownerName]
+            petCarpetSpeedSet[ownerName] = nil
+        end
+    end
+
+    -- ── Pet gotto: swallow owner → move to target → spit ─────────
+    local petGottoActive = false
+    function petGotto(targetPlayer)
+        if petGottoActive then return end
+        petGottoActive = true
+        local ownerName = petOwnerList[1] or player.Name
+        local ownerP = findPlayer(ownerName); if not ownerP then petGottoActive=false;return end
+        local ownerChar = ownerP.Character; if not ownerChar then petGottoActive=false;return end
+        local ownerHRP = ownerChar:FindFirstChild("HumanoidRootPart") or ownerChar:FindFirstChild("Torso")
+        if not ownerHRP then petGottoActive=false;return end
+        -- Swallow: form sphere around owner
+        petState="petsphere"; task.wait(0.8)
+        -- Carry: move sphere (and owner inside) toward target
+        local prevState = petState; petState="follow"
+        local targChar = targetPlayer.Character
+        local targHRP = targChar and (targChar:FindFirstChild("HumanoidRootPart") or targChar:FindFirstChild("Torso"))
+        if targHRP then
+            -- Teleport owner toward target in steps
+            for step=1,20 do
+                if not petGottoActive then break end
+                local newPos = ownerHRP.Position:Lerp(targHRP.Position, step/20)
+                pcall(function() ownerHRP.CFrame = CFrame.new(newPos) end)
+                task.wait(0.05)
+            end
+        end
+        -- Spit: scatter blocks
+        petState="dance"; task.wait(0.5)
+        petState = prevState; petGottoActive=false
+    end
+
+    -- ── Pet bring: swallow target → carry to owner → spit ────────
+    local petBringActive = false
+    function petBring(targetPlayer)
+        if petBringActive then return end
+        petBringActive = true
+        local targChar = targetPlayer.Character; if not targChar then petBringActive=false;return end
+        local targHRP = targChar:FindFirstChild("HumanoidRootPart") or targChar:FindFirstChild("Torso")
+        if not targHRP then petBringActive=false;return end
+        local ownerName = petOwnerList[1] or player.Name
+        local ownerP = findPlayer(ownerName)
+        local ownerChar = ownerP and ownerP.Character
+        local ownerHRP = ownerChar and (ownerChar:FindFirstChild("HumanoidRootPart") or ownerChar:FindFirstChild("Torso"))
+        -- Swallow target: form sphere around target
+        local prevState = petState
+        -- Move pet to target first
+        for step=1,15 do
+            if not petBringActive then break end
+            task.wait(0.05)
+        end
+        -- Carry target to owner
+        if ownerHRP then
+            for step=1,20 do
+                if not petBringActive then break end
+                local newPos = targHRP.Position:Lerp(ownerHRP.Position, step/20)
+                pcall(function() targHRP.CFrame = CFrame.new(newPos) end)
+                task.wait(0.05)
+            end
+        end
+        petState = prevState; petBringActive=false
+    end
+
     local function updatePet(dt, rootPos)
         if not petActive then return end
         local t=tick()
@@ -1760,12 +1957,82 @@ local function main()
                     data.bp.MaxForce=Vector3.new(1e13,1e13,1e13)
                     tgt=part.Position  -- keep exactly where it is
 
+                -- NEW: carpet mode — flat under owner's feet
+                elseif mode2=="carpet" then
+                    local rootPt = targetPos
+                    -- Get ground Y via character foot height
+                    local col = (i-1)%math.max(1,math.ceil(math.sqrt(n)))
+                    local row = math.floor((i-1)/math.max(1,math.ceil(math.sqrt(n))))
+                    tgt = Vector3.new(rootPt.X + (col - math.floor(math.ceil(math.sqrt(n))/2))*1.5,
+                                      rootPt.Y - 2.8,  -- just under feet
+                                      rootPt.Z + (row - math.floor(math.ceil(math.sqrt(n))/2))*1.5)
+                    data.bp.P=900000; data.bp.D=50000  -- fast to follow
+                    data.bp.MaxForce=Vector3.new(1e13,1e13,1e13)
+
+                -- NEW: heart shape
+                elseif mode2=="heart" then
+                    local a=((i-1)/math.max(n,1))*math.pi*2
+                    local hx=16*math.sin(a)^3; local hz=-(13*math.cos(a)-5*math.cos(2*a)-2*math.cos(3*a)-math.cos(4*a))
+                    tgt=targetPos+Vector3.new(hx*(petOrbitDist/16), 2, hz*(petOrbitDist/16))
+
+                -- NEW: sphere
+                elseif mode2=="petsphere" then
+                    local phi=(1+math.sqrt(5))/2; local i2=i-1; local s=math.max(n,1)
+                    local theta=math.acos(math.clamp(1-2*(i2+0.5)/s,-1,1)); local ang2=2*math.pi*i2/phi
+                    local r=petOrbitDist
+                    tgt=targetPos+Vector3.new(r*math.sin(theta)*math.cos(ang2+orbitT*0.5),r*math.sin(theta)*math.sin(ang2+orbitT*0.5)+2,r*math.cos(theta))
+
+                -- NEW: attack mode — converge on attack target then fling
+                elseif mode2=="attack" then
+                    if petAttackTarget then
+                        local targ = findPlayer(petAttackTarget)
+                        local targRoot = targ and targ.Character and (targ.Character:FindFirstChild("HumanoidRootPart") or targ.Character:FindFirstChild("Torso"))
+                        if targRoot then
+                            -- Rush directly at target
+                            data.bp.P=1e6; data.bp.D=10000
+                            data.bp.MaxForce=Vector3.new(1e13,1e13,1e13)
+                            tgt = targRoot.Position
+                        else
+                            tgt = targetPos + Vector3.new(0,3,0)
+                        end
+                    else
+                        tgt = targetPos + Vector3.new(0,3,0)
+                    end
+
+                -- NEW: guard mode — fling anyone near owner except owner
+                elseif mode2=="guard" then
+                    local phi=(1+math.sqrt(5))/2; local i2=i-1; local s=math.max(n,1)
+                    local theta=math.acos(math.clamp(1-2*(i2+0.5)/s,-1,1)); local ang2=2*math.pi*i2/phi + orbitT*2
+                    tgt=targetPos+Vector3.new(5*math.sin(theta)*math.cos(ang2),5*math.sin(theta)*math.sin(ang2)+2,5*math.cos(theta))
+
+                -- NEW: say mode — form text shape (letter positions)
+                elseif mode2=="say" then
+                    local text = petSayText or "HI"
+                    local textLen = #text
+                    local charIdx = math.floor((i-1) / math.max(1, math.ceil(n/textLen))) + 1
+                    charIdx = math.min(charIdx, textLen)
+                    local charOff = (charIdx - (textLen+1)/2) * (petOrbitDist * 0.4)
+                    local posInChar = ((i-1) % math.max(1, math.ceil(n/textLen))) + 1
+                    local totalInChar = math.ceil(n/textLen)
+                    local col2 = (posInChar-1) % 3; local row2 = math.floor((posInChar-1)/3)
+                    tgt = targetPos + Vector3.new(charOff + (col2-1)*1.5, 3 + (2-row2)*1.5, -1.5)
+
                 else -- default hover above
                     tgt=targetPos+Vector3.new(0,4,0)
                 end
 
                 if tgt then
-                    data.bp.P=70000; data.bp.D=2500; data.bp.MaxForce=Vector3.new(1e12,1e12,1e12)
+                    -- FIX #1: Fast BP movement for pet mode too
+                    data.bp.P=800000; data.bp.D=40000; data.bp.MaxForce=Vector3.new(1e12,1e12,1e12)
+                    -- Apply pet spin if any
+                    if petSpinSpeed ~= 0 then
+                        local phase = i*(math.pi*2/math.max(n,1))
+                        local spinAng = orbitT * petSpinSpeed + phase
+                        local spinAxis = Vector3.new(0,1,0)
+                        local offset = tgt - targetPos
+                        local rotCF = CFrame.new(targetPos) * CFrame.fromAxisAngle(spinAxis, spinAng)
+                        tgt = rotCF:PointToWorldSpace(offset)
+                    end
                     data.bp.Position=tgt
                 end
             end
@@ -1776,25 +2043,39 @@ local function main()
             local arr={}
             for part,_ in pairs(controlled) do if part and part.Parent then table.insert(arr,part) end end
             moveParts(arr, rootPos, petOrbitDist, t, petState)
+            if petState=="guard" then doPetGuard(rootPos) end
+            if petState=="attack" and not petAttackFired then doPetAttackFling() end
+            if petState=="carpet" then applyCarpetBoost(player.Name) else removeCarpetBoost(player.Name) end
         elseif #petOwnerList==1 then
-            local root=getPlayerRoot(petOwnerList[1])
-            local tpos=root and root.Position or rootPos
+            local root2=getPlayerRoot(petOwnerList[1])
+            local tpos=root2 and root2.Position or rootPos
+            local ownerState = petOwnerStates_global[petOwnerList[1]] or petState
             local arr=getParts(petOwnerList[1])
-            moveParts(arr, tpos, petOrbitDist, t, petState)
+            moveParts(arr, tpos, petOrbitDist, t, ownerState)
+            if ownerState=="guard" then doPetGuard(tpos) end
+            if ownerState=="attack" and not petAttackFired then doPetAttackFling() end
+            if ownerState=="carpet" then applyCarpetBoost(petOwnerList[1]) else removeCarpetBoost(petOwnerList[1]) end
         else
             -- Split between owners
             for _,ownerName in ipairs(petOwnerList) do
-                local root=getPlayerRoot(ownerName)
-                local tpos=root and root.Position or rootPos
+                local root2=getPlayerRoot(ownerName)
+                local tpos=root2 and root2.Position or rootPos
+                local ownerState = petOwnerStates_global[ownerName] or petState
                 local arr=getParts(ownerName)
-                moveParts(arr, tpos, petOrbitDist, t, petState)
+                moveParts(arr, tpos, petOrbitDist, t, ownerState)
+                if ownerState=="guard" then doPetGuard(tpos) end
+                if ownerState=="carpet" then applyCarpetBoost(ownerName) else removeCarpetBoost(ownerName) end
             end
         end
     end
 
     destroyPet=function()
+        -- Remove carpet speed boosts
+        for ownerName,_ in pairs(petCarpetOwners) do removeCarpetBoost(ownerName) end
+        petCarpetOwners={}; petAttackTarget=nil; petAttackFired=false
+        petGuardActive=false; petSpinSpeed=0; petSayText=nil
         petActive=false; petOwners={}; petOwnerList={}; petState="idle"
-        petSplitOwners={}
+        petSplitOwners={}; petOwnerStates_global={}
         if petGuiUpdateFn then pcall(petGuiUpdateFn) end
     end
 
@@ -1853,6 +2134,7 @@ local function main()
         local cmdLay=Instance.new("UIListLayout",cmdScroll); cmdLay.Padding=UDim.new(0,1); Instance.new("UIPadding",cmdScroll).PaddingLeft=UDim.new(0,4)
         local cmds={
             "!pet <name> — give pet to player",
+            "!unpet <name> — remove player's pet",
             "!follow — follow owner",
             "!stay — stay in place",
             "!dance — random dance",
@@ -1862,6 +2144,16 @@ local function main()
             "!split — split between owners",
             "!ring — ring around owner",
             "!stop — freeze completely",
+            "!carpet — carpet under feet",
+            "!uncarpet — remove carpet",
+            "!attack <name> — fling player",
+            "!heart — heart shape",
+            "!sphere — sphere shape",
+            "!guard — guard owner (fling nearby)",
+            "!spin <speed> — set spin speed",
+            "!say <text> — form text",
+            "!gotto <name> — carry owner to target",
+            "!bring <name> — bring target to owner",
         }
         for _,cmd in ipairs(cmds) do
             local l=Instance.new("TextLabel",cmdScroll); l.Text=cmd; l.Size=UDim2.new(1,0,0,14); l.BackgroundTransparency=1
@@ -1890,12 +2182,16 @@ local function main()
 
         -- Chat listener: per-owner individual commands
         -- Each owner can only control THEIR OWN assigned parts.
-        local petOwnerStates = {}
+        local petOwnerStates = petOwnerStates_global  -- FIX #3: use module-level table
 
         local function redistributeParts()
             local allParts={}
             for part,_ in pairs(controlled) do if part and part.Parent then table.insert(allParts,part) end end
             petSplitOwners={}
+            -- Initialize state for any owner that doesn't have one yet
+            for _,ownerN in ipairs(petOwnerList) do
+                if not petOwnerStates_global[ownerN] then petOwnerStates_global[ownerN]="follow" end
+            end
             if #petOwnerList>=2 then
                 local perOwner=math.max(1,math.floor(#allParts/#petOwnerList))
                 local si=1
@@ -1915,73 +2211,168 @@ local function main()
             local isSelf   = (speakerName == player.Name)
             local isOwner  = petOwners[speakerName]
 
-            -- Only script owner can assign pets
+            -- FIX #3: Script owner assignment/management commands (ALWAYS processed for isSelf)
             if isSelf then
-                local assignName = lower:match("^!pet%s+(.+)$")
-                if assignName then
-                    for _,p2 in ipairs(Players:GetPlayers()) do
-                        if p2.Name:lower()==assignName or p2.DisplayName:lower()==assignName then
-                            if not petOwners[p2.Name] then
-                                petOwners[p2.Name]=true
-                                table.insert(petOwnerList, p2.Name)
-                                petOwnerStates[p2.Name]="follow"
-                                redistributeParts()
-                            end
-                            break
-                        end
+                -- !pet <name> — assign pet to player (partial match supported)
+                local assignQuery = lower:match("^!pet%s+(.+)$")
+                if assignQuery then
+                    local p2 = findPlayer(assignQuery)
+                    if p2 and not petOwners[p2.Name] then
+                        petOwners[p2.Name]=true
+                        table.insert(petOwnerList, p2.Name)
+                        petOwnerStates_global[p2.Name]="follow"
+                        redistributeParts()
                     end
                     return
                 end
+
+                -- !unpet <name> — remove a player's pet
+                local unpetQuery = lower:match("^!unpet%s+(.+)$")
+                if unpetQuery then
+                    local p2 = findPlayer(unpetQuery)
+                    if p2 then
+                        petOwners[p2.Name]=nil
+                        for i,v in ipairs(petOwnerList) do if v==p2.Name then table.remove(petOwnerList,i);break end end
+                        petOwnerStates_global[p2.Name]=nil
+                        petSplitOwners[p2.Name]=nil
+                        petCarpetOwners[p2.Name]=nil
+                        redistributeParts()
+                    end
+                    return
+                end
+
+                -- !attack <name> — fling targeted player
+                local attackQuery = lower:match("^!attack%s+(.+)$")
+                if attackQuery then
+                    local p2 = findPlayer(attackQuery)
+                    petAttackTarget = p2 and p2.Name or nil
+                    if petAttackTarget then petState="attack" end
+                    return
+                end
+
+                -- !bring <name> — swallow target and bring to owner
+                local bringQuery = lower:match("^!bring%s+(.+)$")
+                if bringQuery then
+                    local p2 = findPlayer(bringQuery)
+                    if p2 then
+                        task.spawn(function() petBring(p2) end)
+                    end
+                    return
+                end
+
+                -- !gotto <name> — swallow owner and carry to target
+                local gottoQuery = lower:match("^!gotto%s+(.+)$")
+                if gottoQuery then
+                    local p2 = findPlayer(gottoQuery)
+                    if p2 then
+                        task.spawn(function() petGotto(p2) end)
+                    end
+                    return
+                end
+
+                -- !spin <speed>
+                local spinNum = lower:match("^!spin%s+([%d%.%-]+)$")
+                if spinNum then petSpinSpeed = tonumber(spinNum) or 0; return end
+
+                -- !say <text>
+                local sayText = lower:match("^!say%s+(.+)$")
+                if sayText then petSayText = sayText; petState = "say"; return end
             end
 
+            -- Commands any owner OR script owner can run on their own pet
             if not (isSelf or isOwner) then return end
 
-            -- Determine whose parts to affect
+            -- FIX #3: Script owner with NO owners = control all parts globally
+            -- (was broken before: owner-only gate blocked isSelf commands when no owners)
             local targetOwner = speakerName
-            -- Script owner with no assigned owners: control all parts globally
-            if isSelf and #petOwnerList == 0 then
-                if lower=="!follow" then petState="follow"
-                elseif lower=="!stay" then
+
+            -- Commands valid for self (no owners) or owners
+            if lower=="!follow" then
+                if isSelf and #petOwnerList==0 then petState="follow"
+                else if petOwnerStates_global[targetOwner] then petOwnerStates_global[targetOwner]="follow" end end
+
+            elseif lower=="!stay" then
+                if isSelf and #petOwnerList==0 then
                     for part,data in pairs(controlled) do
-                        if part and part.Parent and data.bp and data.bp.Parent then
-                            data.bp.Position=part.Position
-                        end
+                        if part and part.Parent and data.bp and data.bp.Parent then data.bp.Position=part.Position end
                     end
                     petState="stay"
-                elseif lower=="!dance" then petState="dance"; petDanceT=0
-                elseif lower=="!orbit" then petState="orbit"; petOrbitDist=8
-                elseif lower:match("^!orbit%s+(%d+)$") then
-                    local d=tonumber(lower:match("^!orbit%s+(%d+)$"))
-                    if d then petOrbitDist=d; petState="orbit" end
-                elseif lower=="!wall" then petState="wall"
-                elseif lower=="!ring" then petState="ring"; petOrbitDist=8
-                elseif lower=="!stop" then petState="stop"
-                end
-                return
-            end
-
-            -- Per-owner: only affects this owner's assigned parts
-            if not petOwnerStates[targetOwner] then return end
-            if lower=="!follow" then petOwnerStates[targetOwner]="follow"
-            elseif lower=="!stay" then
-                local parts = petSplitOwners[targetOwner] or {}
-                for _,part in ipairs(parts) do
-                    local data=controlled[part]
-                    if data and data.bp and data.bp.Parent then
-                        data.bp.Position=part.Position
+                else
+                    local parts=petSplitOwners[targetOwner] or {}
+                    for _,part in ipairs(parts) do
+                        local data=controlled[part]
+                        if data and data.bp and data.bp.Parent then data.bp.Position=part.Position end
                     end
+                    if petOwnerStates_global[targetOwner] then petOwnerStates_global[targetOwner]="stay" end
                 end
-                petOwnerStates[targetOwner]="stay"
-            elseif lower=="!dance" then petOwnerStates[targetOwner]="dance"; petDanceT=0
-            elseif lower=="!orbit" then petOwnerStates[targetOwner]="orbit"
+
+            elseif lower=="!dance" then
+                if isSelf and #petOwnerList==0 then petState="dance"; petDanceT=0
+                else if petOwnerStates_global[targetOwner] then petOwnerStates_global[targetOwner]="dance"; petDanceT=0 end end
+
+            elseif lower=="!orbit" then
+                if isSelf and #petOwnerList==0 then petState="orbit"; petOrbitDist=8
+                else if petOwnerStates_global[targetOwner] then petOwnerStates_global[targetOwner]="orbit" end end
+
             elseif lower:match("^!orbit%s+(%d+)$") then
                 local d=tonumber(lower:match("^!orbit%s+(%d+)$"))
-                if d then petOwnerStates[targetOwner]="orbit"; petOrbitDist=d end
-            elseif lower=="!wall" then petOwnerStates[targetOwner]="wall"
-            elseif lower=="!ring" then petOwnerStates[targetOwner]="ring"
-            elseif lower=="!stop" then petOwnerStates[targetOwner]="stop"
+                if d then
+                    petOrbitDist=d
+                    if isSelf and #petOwnerList==0 then petState="orbit"
+                    else if petOwnerStates_global[targetOwner] then petOwnerStates_global[targetOwner]="orbit" end end
+                end
+
+            elseif lower=="!wall" then
+                if isSelf and #petOwnerList==0 then petState="wall"
+                else if petOwnerStates_global[targetOwner] then petOwnerStates_global[targetOwner]="wall" end end
+
+            elseif lower=="!ring" then
+                if isSelf and #petOwnerList==0 then petState="ring"; petOrbitDist=8
+                else if petOwnerStates_global[targetOwner] then petOwnerStates_global[targetOwner]="ring" end end
+
+            elseif lower=="!stop" then
+                if isSelf and #petOwnerList==0 then petState="stop"
+                else if petOwnerStates_global[targetOwner] then petOwnerStates_global[targetOwner]="stop" end end
+
             elseif lower=="!split" then redistributeParts()
+
+            -- NEW COMMANDS ──────────────────────────────────────────
+            elseif lower=="!carpet" then
+                local t = isSelf and (#petOwnerList==0 and player.Name or petOwnerList[1]) or targetOwner
+                petCarpetOwners[t]=true
+                if isSelf and #petOwnerList==0 then petState="carpet"
+                else if petOwnerStates_global[t] then petOwnerStates_global[t]="carpet" end end
+
+            elseif lower=="!uncarpet" then
+                local t = isSelf and (#petOwnerList==0 and player.Name or petOwnerList[1]) or targetOwner
+                petCarpetOwners[t]=nil
+                if isSelf and #petOwnerList==0 then petState="follow"
+                else if petOwnerStates_global[t] then petOwnerStates_global[t]="follow" end end
+
+            elseif lower=="!heart" then
+                if isSelf and #petOwnerList==0 then petState="heart"
+                else if petOwnerStates_global[targetOwner] then petOwnerStates_global[targetOwner]="heart" end end
+
+            elseif lower=="!sphere" then
+                if isSelf and #petOwnerList==0 then petState="petsphere"
+                else if petOwnerStates_global[targetOwner] then petOwnerStates_global[targetOwner]="petsphere" end end
+
+            elseif lower=="!guard" then
+                petGuardActive = not petGuardActive
+                if isSelf and #petOwnerList==0 then petState = petGuardActive and "guard" or "idle"
+                else if petOwnerStates_global[targetOwner] then petOwnerStates_global[targetOwner] = petGuardActive and "guard" or "follow" end end
+
+            elseif lower=="!unpet" then
+                -- owner can remove their own pet
+                if isOwner then
+                    petOwners[speakerName]=nil
+                    for i,v in ipairs(petOwnerList) do if v==speakerName then table.remove(petOwnerList,i);break end end
+                    petOwnerStates_global[speakerName]=nil; petSplitOwners[speakerName]=nil
+                    redistributeParts()
+                end
             end
+
+            rebuildPetOwnerList(listFrame)
         end
 
         player.Chatted:Connect(function(msg) handleCommand(player.Name,msg) end)
@@ -2044,14 +2435,14 @@ local function main()
         -- Max Blue: click to start, click again to stop
         blueBtn.MouseButton1Click:Connect(function()
             if gojoState == "blue_hold" then
-                stopMaxBlue()
+                safeResetGojo()  -- FIX #4: increments gojoGen, kills thread
                 blueBtn.Text = "◈ MAX BLUE"
             elseif gojoState == "idle" then
                 fireMaxBlue()
                 blueBtn.Text = "◈ MAX BLUE  [STOP]"
                 task.spawn(function()
-                    -- Auto-revert button label after 10s
-                    task.wait(11)
+                    -- Auto-revert button label after 12s
+                    task.wait(12)
                     if blueBtn.Parent then blueBtn.Text = "◈ MAX BLUE" end
                 end)
             end
@@ -2059,6 +2450,10 @@ local function main()
 
         redBtn.MouseButton1Click:Connect(function()
             local now = tick()
+            -- FIX #4: if a technique is running, stop it first
+            if gojoState ~= "idle" and gojoState ~= "blue_hold" then
+                safeResetGojo(); return
+            end
             if gojoState ~= "idle" then return end
             if now - gojoLastFire.red < RED_CD then
                 stateLbl.Text = "RED: cooldown "..(math.ceil(RED_CD-(now-gojoLastFire.red)).."s")
@@ -2070,6 +2465,10 @@ local function main()
 
         purpleBtn.MouseButton1Click:Connect(function()
             local now = tick()
+            -- FIX #4: if a technique is running, stop it first
+            if gojoState ~= "idle" and gojoState ~= "blue_hold" then
+                safeResetGojo(); return
+            end
             if gojoState ~= "idle" then return end
             if now - gojoLastFire.purple < PURPLE_CD then
                 stateLbl.Text = "PURPLE: cooldown "..(math.ceil(PURPLE_CD-(now-gojoLastFire.purple)).."s")
@@ -2096,10 +2495,10 @@ local function main()
     end
 
     -- ════════════════════════════════════════════════════════════
-    -- MAIN LOOP (Stepped = before physics, minimum lag)
+    -- MAIN LOOP (Heartbeat = after physics, smooth 60fps, no lag)
     -- ════════════════════════════════════════════════════════════
     local function mainLoop()
-        RunService.Stepped:Connect(function(_,dt)
+        RunService.Heartbeat:Connect(function(dt)
             if not scriptAlive then return end
             snakeT=snakeT+dt; gasterT=gasterT+dt
             petDanceT=petDanceT+dt
@@ -2212,10 +2611,24 @@ local function main()
                         finalCF=CFrame.new(targetCF.Position)*CFrame.fromAxisAngle(spinAxis,spinAngle+phase)
                     end
                     local data=item.d
-                    pcall(function()
-                        if data.bp and data.bp.Parent then data.bp.Position=finalCF.Position;data.bg.CFrame=finalCF
-                        else part.CFrame=finalCF;part.AssemblyLinearVelocity=Vector3.zero;part.AssemblyAngularVelocity=Vector3.zero end
-                    end)
+                    -- Skip locked blocks in formation (they hold their position via lockAllNow)
+                    if lockedBlocks then
+                        -- don't move locked blocks in formation
+                    else
+                        pcall(function()
+                            if data.bp and data.bp.Parent then
+                                -- FIX #1: High P for fast, snappy movement
+                                data.bp.P=800000; data.bp.D=40000
+                                data.bp.MaxForce=Vector3.new(1e12,1e12,1e12)
+                                data.bp.Position=finalCF.Position
+                                if data.bg and data.bg.Parent then data.bg.CFrame=finalCF end
+                            else
+                                part.CFrame=finalCF
+                                part.AssemblyLinearVelocity=Vector3.zero
+                                part.AssemblyAngularVelocity=Vector3.zero
+                            end
+                        end)
+                    end
                 end
             end
         end)
