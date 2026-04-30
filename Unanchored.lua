@@ -1,5 +1,5 @@
 -- ============================================================
--- UNANCHORED MANIPULATOR KII v13 -- DELTA EXECUTOR
+-- UNANCHORED MANIPULATOR KII v16 -- DELTA EXECUTOR
 -- v13 FIXES:
 --   [1] Unanchored blocks move fast (BP P=800000, D=40000) with
 --       RunService.Heartbeat for smooth ~60fps, no lag.
@@ -66,7 +66,7 @@ local function makeDraggable(handle, panel, edgeOnly)
 end
 
 local function main()
-    print("[ManipKii v13] "..player.Name)
+    print("[ManipKii v16] "..player.Name)
 
     -- ── Core state ────────────────────────────────────────────
     local isActivated=false; local activeMode="none"; local lastMode="none"
@@ -78,8 +78,8 @@ local function main()
         local p=math.max(1,pullStrength); local d=math.max(50,p*0.05)
         for _,data in pairs(controlled) do
             pcall(function()
-                if data.bp and data.bp.Parent then data.bp.P=p;data.bp.D=d;data.bp.MaxForce=Vector3.new(1e12,1e12,1e12)end
-                if data.bg and data.bg.Parent then data.bg.P=p;data.bg.D=d;data.bg.MaxTorque=Vector3.new(1e12,1e12,1e12)end
+                if data.bp and data.bp.Parent then data.bp.P=p;data.bp.D=d;data.bp.MaxForce=Vector3.new(1e9,1e9,1e9)end
+                if data.bg and data.bg.Parent then data.bg.P=p;data.bg.D=d;data.bg.MaxTorque=Vector3.new(1e9,1e9,1e9)end
             end)
         end
     end
@@ -191,7 +191,7 @@ local function main()
     local function setUnderground(part, idx)
         local data=controlled[part]; if not data then return end
         if data.bp and data.bp.Parent then
-            data.bp.P=80000; data.bp.D=4000
+            data.bp.P=500000; data.bp.D=30000
             data.bp.MaxForce=Vector3.new(1e12,1e12,1e12)
             data.bp.Position=Vector3.new(
                 shrineCenter.X + (idx%20)*3,
@@ -328,11 +328,33 @@ local function main()
         local effectiveRange=(pullStrength>=5000) and math.huge or detectionRange
         if root and(part.Position-root.Position).Magnitude>effectiveRange then return end
         local origCC=part.CanCollide; local origAnch=part.Anchored
+        local origMassless = part.Massless
+        local origPhysProps = part.CustomPhysicalProperties
         pcall(function()part.CanCollide=false end)
-        local p=math.max(1,pullStrength); local d=math.max(50,p*0.05)
-        local bp=Instance.new("BodyPosition"); bp.MaxForce=Vector3.new(1e12,1e12,1e12); bp.P=p; bp.D=d; bp.Position=part.Position; bp.Parent=part
-        local bg=Instance.new("BodyGyro"); bg.MaxTorque=Vector3.new(1e12,1e12,1e12); bg.P=p; bg.D=d; bg.CFrame=part.CFrame; bg.Parent=part
-        controlled[part]={origCC=origCC,origAnch=origAnch,bp=bp,bg=bg,origColor=part.Color,origMaterial=part.Material}
+        -- Set network ownership so our physics forces replicate to server and all clients
+        pcall(function()part:SetNetworkOwner(player)end)
+        -- Near-zero mass: density 0.01 = minimum allowed in Roblox.
+        -- Less mass means same P value produces ~70x more acceleration → much faster movement
+        -- that is still server-visible because it goes through BodyPosition physics.
+        pcall(function()
+            part.CustomPhysicalProperties = PhysicalProperties.new(0.01,0.3,0.5,1,1)
+            part.Massless = true
+        end)
+        -- P=300000, D=8000: with near-zero mass these values move blocks near-instantly
+        -- without causing jitter. MaxForce=1e9 is enough for massless parts.
+        local bp=Instance.new("BodyPosition")
+        bp.MaxForce = Vector3.new(1e9,1e9,1e9)
+        bp.P        = 300000
+        bp.D        = 8000
+        bp.Position = part.Position; bp.Parent=part
+        local bg=Instance.new("BodyGyro")
+        bg.MaxTorque = Vector3.new(1e9,1e9,1e9)
+        bg.P         = 300000
+        bg.D         = 8000
+        bg.CFrame=part.CFrame; bg.Parent=part
+        controlled[part]={origCC=origCC,origAnch=origAnch,bp=bp,bg=bg,
+            origColor=part.Color,origMaterial=part.Material,
+            origMassless=origMassless,origPhysProps=origPhysProps}
         partCount=partCount+1
     end
 
@@ -344,8 +366,13 @@ local function main()
         if part and part.Parent then
             pcall(function()
                 part.CanCollide=data.origCC; part.Anchored=data.origAnch or false
-                if data.origColor then part.Color=data.origColor end
+                if data.origColor    then part.Color=data.origColor end
                 if data.origMaterial then part.Material=data.origMaterial end
+                -- Restore original mass / physics properties
+                part.Massless = data.origMassless or false
+                if data.origPhysProps then
+                    part.CustomPhysicalProperties = data.origPhysProps
+                end
             end)
         end
     end
@@ -380,12 +407,18 @@ local function main()
         for _,obj in ipairs(workspace:GetDescendants())do
             if isValid(obj) and not controlled[obj]then
                 local origCC=obj.CanCollide; local origAnch=obj.Anchored
+                local origMassless   = obj.Massless
+                local origPhysProps  = obj.CustomPhysicalProperties
                 pcall(function()obj.CanCollide=false end)
                 pcall(function()obj:SetNetworkOwner(player)end)  -- claim ownership
-                local p=math.max(1,pullStrength); local d=math.max(50,p*0.05)
-                local bp=Instance.new("BodyPosition"); bp.MaxForce=Vector3.new(1e12,1e12,1e12); bp.P=p; bp.D=d; bp.Position=obj.Position; bp.Parent=obj
-                local bg=Instance.new("BodyGyro"); bg.MaxTorque=Vector3.new(1e12,1e12,1e12); bg.P=p; bg.D=d; bg.CFrame=obj.CFrame; bg.Parent=obj
-                controlled[obj]={origCC=origCC,origAnch=origAnch,bp=bp,bg=bg,origColor=obj.Color,origMaterial=obj.Material}
+                -- Near-zero mass for fast movement
+                pcall(function()
+                    obj.CustomPhysicalProperties = PhysicalProperties.new(0.01,0.3,0.5,1,1)
+                    obj.Massless = true
+                end)
+                local bp=Instance.new("BodyPosition"); bp.MaxForce=Vector3.new(1e9,1e9,1e9); bp.P=300000; bp.D=8000; bp.Position=obj.Position; bp.Parent=obj
+                local bg=Instance.new("BodyGyro"); bg.MaxTorque=Vector3.new(1e9,1e9,1e9); bg.P=300000; bg.D=8000; bg.CFrame=obj.CFrame; bg.Parent=obj
+                controlled[obj]={origCC=origCC,origAnch=origAnch,bp=bp,bg=bg,origColor=obj.Color,origMaterial=obj.Material,origMassless=origMassless,origPhysProps=origPhysProps}
                 partCount=partCount+1
             elseif controlled[obj] then
                 -- Re-assert ownership on already-controlled parts (in case someone grabbed)
@@ -408,12 +441,12 @@ local function main()
                 if not (data.bp and data.bp.Parent) then
                     local bp = Instance.new("BodyPosition")
                     bp.MaxForce = Vector3.new(1e15,1e15,1e15)
-                    bp.P = 500000; bp.D = 50000
+                    bp.P = 3000000; bp.D = 50000
                     bp.Position = part.Position; bp.Parent = part
                     data.bp = bp
                 else
                     data.bp.MaxForce = Vector3.new(1e15,1e15,1e15)
-                    data.bp.P = 500000; data.bp.D = 50000
+                    data.bp.P = 3000000; data.bp.D = 50000
                     -- Hold locked position (do NOT update Position so it stays put)
                 end
                 if not (data.bg and data.bg.Parent) then
@@ -1181,7 +1214,7 @@ local function main()
                             (math.random()-0.5)*2, (math.random()-0.5)*2, (math.random()-0.5)*2)
                         -- Lerp between cluster and scattered based on cycle
                         local targetPos = clusterPos:Lerp(scatterPos, pullFactor)
-                        data.bp.P = 60000; data.bp.D = 1800
+                        data.bp.P = 3000000; data.bp.D = 30000
                         data.bp.Position = targetPos
                         -- Pulse color between cyan and white-blue
                         pcall(function()
@@ -1258,7 +1291,7 @@ local function main()
                             math.cos(spiralAng)*spiralR,
                             math.sin(spiralAng + i)*spiralR*0.5,
                             math.sin(spiralAng)*spiralR)
-                        data.bp.P = 70000 + progress*30000
+                        data.bp.P = 3000000 + progress*100000
                         data.bp.D = 1500
                         data.bp.Position = suckPt + offset
                         -- Glow brighter as we charge
@@ -1334,7 +1367,7 @@ local function main()
                 local data = controlled[part]
                 if data and data.bp and data.bp.Parent then
                     local off = Vector3.new((i%3-1)*2, (math.floor(i/3)%3-1)*2, (i%2)*1.5)
-                    data.bp.P = 60000; data.bp.D = 2000
+                    data.bp.P = 3000000; data.bp.D = 30000
                     data.bp.Position = center + off
                 end
             end
@@ -1381,7 +1414,7 @@ local function main()
                             (math.random()-0.5)*(1-progress)*4,
                             (math.random()-0.5)*(1-progress)*4,
                             (math.random()-0.5)*(1-progress)*4)
-                        data.bp.P = 80000 + progress*40000
+                        data.bp.P = 600000 + progress*200000
                         data.bp.D = 1000
                         data.bp.Position = aimPt + off*(1-progress)
                         pcall(function()
@@ -1415,7 +1448,7 @@ local function main()
                             local toCenter = bhCenter - part.Position
                             local dist2    = math.max(toCenter.Magnitude, 1)
                             local pull     = math.clamp(300/dist2, 0, 80)
-                            data.bp.P = 90000; data.bp.D = 500
+                            data.bp.P = 700000; data.bp.D = 10000
                             data.bp.Position = part.Position + toCenter.Unit * pull * dt2 * 20
                             pcall(function() part.Color = Color3.fromRGB(80,0,140) end)
                         end
@@ -1471,7 +1504,7 @@ local function main()
                     local theta=math.acos(math.clamp(1-2*(idx+0.5)/s,-1,1))
                     local ang=2*math.pi*idx/phi + t2*0.25  -- slow rotation
                     local r=gojoInfinityRadius*(0.95+math.sin(t2*0.7+i*0.2)*0.05)
-                    data.bp.P=60000; data.bp.D=3000
+                    data.bp.P=500000; data.bp.D=30000
                     data.bp.MaxForce=Vector3.new(1e12,1e12,1e12)
                     data.bp.Position=Vector3.new(
                         rootPos.X + r*math.sin(theta)*math.cos(ang),
@@ -1745,7 +1778,7 @@ local function main()
         end
     end
 
-    -- ── Pet attack: touch = explosion fling on target only ───────
+    -- ── Pet attack: blocks rush at target, on touch set huge velocity on target ──
     local petAttackFired = false
     local function doPetAttackFling()
         if petAttackFired then return end
@@ -1755,18 +1788,33 @@ local function main()
         if not targChar then return end
         local targHRP = targChar:FindFirstChild("HumanoidRootPart") or targChar:FindFirstChild("Torso")
         if not targHRP then return end
-        -- Connect Touched on all attack parts
+
+        -- Connect Touched on all controlled parts — when a block reaches target, fling them
         for part,_ in pairs(controlled) do
             if part and part.Parent then
                 local conn; conn = part.Touched:Connect(function(hit)
                     if petAttackFired then pcall(function()conn:Disconnect()end); return end
-                    if not hit or not hit:IsDescendantOf(targChar) then return end
+                    if not hit then return end
+                    -- Check if hit is part of target
+                    local hitChar = hit.Parent
+                    if hitChar ~= targChar and not hit:IsDescendantOf(targChar) then return end
                     petAttackFired = true
                     pcall(function()conn:Disconnect()end)
+                    -- Direct velocity fling — works client-side
                     pcall(function()
-                        local ex=Instance.new("Explosion"); ex.Position=hit.Position
-                        ex.BlastRadius=12; ex.BlastPressure=2000000
-                        ex.DestroyJointRadiusPercent=0; ex.Parent=workspace
+                        targHRP.AssemblyLinearVelocity = Vector3.new(
+                            math.random(-1,1)*80,
+                            120,
+                            math.random(-1,1)*80
+                        )
+                    end)
+                    -- Also try BodyVelocity as backup
+                    pcall(function()
+                        local bv = Instance.new("BodyVelocity")
+                        bv.MaxForce = Vector3.new(1e9,1e9,1e9)
+                        bv.Velocity = Vector3.new(math.random(-1,1)*80, 120, math.random(-1,1)*80)
+                        bv.Parent = targHRP
+                        game:GetService("Debris"):AddItem(bv, 0.3)
                     end)
                 end)
                 task.delay(8, function() pcall(function()conn:Disconnect()end) end)
@@ -1778,17 +1826,27 @@ local function main()
     local petGuardLastFling = 0
     local function doPetGuard(ownerPos)
         local now = tick()
-        if now - petGuardLastFling < 2 then return end
+        if now - petGuardLastFling < 1.5 then return end
         for _,p2 in ipairs(Players:GetPlayers()) do
             if p2 ~= player and not petOwners[p2.Name] then
                 local ch = p2.Character
                 local hrp = ch and (ch:FindFirstChild("HumanoidRootPart") or ch:FindFirstChild("Torso"))
-                if hrp and (hrp.Position - ownerPos).Magnitude < 8 then
+                if hrp and (hrp.Position - ownerPos).Magnitude < 10 then
                     petGuardLastFling = now
+                    -- Fling via direct velocity (works client-side)
                     pcall(function()
-                        local ex=Instance.new("Explosion"); ex.Position=hrp.Position
-                        ex.BlastRadius=6; ex.BlastPressure=800000
-                        ex.DestroyJointRadiusPercent=0; ex.Parent=workspace
+                        local flingDir = (hrp.Position - ownerPos).Unit
+                        hrp.AssemblyLinearVelocity = Vector3.new(
+                            flingDir.X*90, 80, flingDir.Z*90
+                        )
+                    end)
+                    pcall(function()
+                        local bv = Instance.new("BodyVelocity")
+                        bv.MaxForce = Vector3.new(1e9,1e9,1e9)
+                        local flingDir = (hrp.Position - ownerPos + Vector3.new(0,0.5,0)).Unit
+                        bv.Velocity = flingDir * 100
+                        bv.Parent = hrp
+                        game:GetService("Debris"):AddItem(bv, 0.25)
                     end)
                 end
             end
@@ -1816,65 +1874,84 @@ local function main()
         end
     end
 
-    -- ── Pet gotto: swallow owner → move to target → spit ─────────
+    -- ── Pet gotto: cage owner in sphere → carry to target → release ──
     local petGottoActive = false
     function petGotto(targetPlayer)
         if petGottoActive then return end
         petGottoActive = true
+        local prevState    = petState
+        local prevOrbitDst = petOrbitDist
         local ownerName = petOwnerList[1] or player.Name
-        local ownerP = findPlayer(ownerName); if not ownerP then petGottoActive=false;return end
-        local ownerChar = ownerP.Character; if not ownerChar then petGottoActive=false;return end
-        local ownerHRP = ownerChar:FindFirstChild("HumanoidRootPart") or ownerChar:FindFirstChild("Torso")
-        if not ownerHRP then petGottoActive=false;return end
-        -- Swallow: form sphere around owner
-        petState="petsphere"; task.wait(0.8)
-        -- Carry: move sphere (and owner inside) toward target
-        local prevState = petState; petState="follow"
+        local ownerP    = findPlayer(ownerName)
+        if not ownerP then petGottoActive=false; return end
+        local ownerChar = ownerP.Character
+        if not ownerChar then petGottoActive=false; return end
+        local ownerHRP  = ownerChar:FindFirstChild("HumanoidRootPart") or ownerChar:FindFirstChild("Torso")
+        if not ownerHRP then petGottoActive=false; return end
+        -- Phase 1: shrink sphere tightly around owner (cage)
+        petOrbitDist = 3; petState = "petsphere"
+        task.wait(1.2)
+        -- Phase 2: carry owner (teleport in steps), sphere stays around them
         local targChar = targetPlayer.Character
-        local targHRP = targChar and (targChar:FindFirstChild("HumanoidRootPart") or targChar:FindFirstChild("Torso"))
+        local targHRP  = targChar and (targChar:FindFirstChild("HumanoidRootPart") or targChar:FindFirstChild("Torso"))
         if targHRP then
-            -- Teleport owner toward target in steps
-            for step=1,20 do
+            local startPos = ownerHRP.Position
+            local endPos   = targHRP.Position + Vector3.new(0, 0, 3)
+            for step = 1, 30 do
                 if not petGottoActive then break end
-                local newPos = ownerHRP.Position:Lerp(targHRP.Position, step/20)
-                pcall(function() ownerHRP.CFrame = CFrame.new(newPos) end)
-                task.wait(0.05)
+                local alpha = step / 30
+                pcall(function()
+                    ownerHRP.CFrame = CFrame.new(startPos:Lerp(endPos, alpha))
+                end)
+                task.wait(0.04)
             end
         end
-        -- Spit: scatter blocks
-        petState="dance"; task.wait(0.5)
-        petState = prevState; petGottoActive=false
+        -- Phase 3: spit/scatter
+        petOrbitDist = prevOrbitDst; petState = "dance"
+        task.wait(0.5)
+        petState = prevState; petGottoActive = false
     end
 
-    -- ── Pet bring: swallow target → carry to owner → spit ────────
+    -- ── Pet bring: fly blocks to target, cage them, carry to owner ──
     local petBringActive = false
     function petBring(targetPlayer)
         if petBringActive then return end
         petBringActive = true
-        local targChar = targetPlayer.Character; if not targChar then petBringActive=false;return end
+        local prevState    = petState
+        local prevOrbitDst = petOrbitDist
+        local targChar = targetPlayer.Character
+        if not targChar then petBringActive=false; return end
         local targHRP = targChar:FindFirstChild("HumanoidRootPart") or targChar:FindFirstChild("Torso")
-        if not targHRP then petBringActive=false;return end
+        if not targHRP then petBringActive=false; return end
         local ownerName = petOwnerList[1] or player.Name
-        local ownerP = findPlayer(ownerName)
+        local ownerP    = findPlayer(ownerName)
         local ownerChar = ownerP and ownerP.Character
-        local ownerHRP = ownerChar and (ownerChar:FindFirstChild("HumanoidRootPart") or ownerChar:FindFirstChild("Torso"))
-        -- Swallow target: form sphere around target
-        local prevState = petState
-        -- Move pet to target first
-        for step=1,15 do
-            if not petBringActive then break end
-            task.wait(0.05)
-        end
-        -- Carry target to owner
+        local ownerHRP  = ownerChar and (ownerChar:FindFirstChild("HumanoidRootPart") or ownerChar:FindFirstChild("Torso"))
+        -- Phase 1: temporarily change "targetPos" to target player — do this by
+        --          overriding petOwnerList temporarily so blocks orbit target
+        local savedList = petOwnerList
+        petOwnerList = {targetPlayer.Name}; petOwnerStates_global[targetPlayer.Name] = "petsphere"
+        petOrbitDist = 3; petState = "petsphere"
+        task.wait(1.2)  -- cage around target
+        -- Phase 2: carry target to owner in steps
         if ownerHRP then
-            for step=1,20 do
+            local startPos = targHRP.Position
+            local endPos   = ownerHRP.Position + Vector3.new(2, 0, 2)
+            for step = 1, 30 do
                 if not petBringActive then break end
-                local newPos = targHRP.Position:Lerp(ownerHRP.Position, step/20)
-                pcall(function() targHRP.CFrame = CFrame.new(newPos) end)
-                task.wait(0.05)
+                local alpha = step / 30
+                pcall(function()
+                    targHRP.CFrame = CFrame.new(startPos:Lerp(endPos, alpha))
+                end)
+                task.wait(0.04)
             end
         end
-        petState = prevState; petBringActive=false
+        -- Phase 3: release / scatter
+        petOwnerList = savedList
+        petOwnerStates_global[targetPlayer.Name] = nil
+        petOrbitDist = prevOrbitDst; petState = "dance"
+        task.wait(0.5)
+        petState = prevState; petBringActive = false
     end
 
     local function updatePet(dt, rootPos)
@@ -1906,15 +1983,10 @@ local function main()
                     tgt=targetPos+Vector3.new(r*math.sin(theta2)*math.cos(ang2),r*math.sin(theta2)*math.sin(ang2)+2,r*math.cos(theta2))
 
                 elseif mode2=="stay" then
-                    -- Lock BP.Position to where the part currently is, don't move it
-                    data.bp.P=200000; data.bp.D=8000
-                    data.bp.MaxForce=Vector3.new(1e13,1e13,1e13)
-                    -- Only update once (keep its existing target); skip setting tgt
-                    -- We do NOT update data.bp.Position so it holds its last set pos
-                    part.AssemblyLinearVelocity=Vector3.zero
-                    part.AssemblyAngularVelocity=Vector3.zero
-                    -- Do nothing further for this part
-                    tgt=nil  -- skip tgt assignment below
+                    -- Hold position via CFrame each frame
+                    part.AssemblyLinearVelocity  = Vector3.zero
+                    part.AssemblyAngularVelocity = Vector3.zero
+                    tgt = part.Position  -- re-set to current pos every frame = frozen
 
                 elseif mode2=="orbit" then
                     local ang2=orbitT*1.5+i*(math.pi*2/n)
@@ -1950,24 +2022,20 @@ local function main()
                     end
 
                 elseif mode2=="stop" then
-                    -- Zero velocity and hold current world position
-                    part.AssemblyLinearVelocity=Vector3.zero
-                    part.AssemblyAngularVelocity=Vector3.zero
-                    data.bp.P=200000; data.bp.D=8000
-                    data.bp.MaxForce=Vector3.new(1e13,1e13,1e13)
-                    tgt=part.Position  -- keep exactly where it is
+                    -- Hold current position exactly via CFrame each frame
+                    part.AssemblyLinearVelocity  = Vector3.zero
+                    part.AssemblyAngularVelocity = Vector3.zero
+                    tgt = part.Position  -- keep exactly where it is now
 
                 -- NEW: carpet mode — flat under owner's feet
                 elseif mode2=="carpet" then
                     local rootPt = targetPos
-                    -- Get ground Y via character foot height
-                    local col = (i-1)%math.max(1,math.ceil(math.sqrt(n)))
-                    local row = math.floor((i-1)/math.max(1,math.ceil(math.sqrt(n))))
-                    tgt = Vector3.new(rootPt.X + (col - math.floor(math.ceil(math.sqrt(n))/2))*1.5,
-                                      rootPt.Y - 2.8,  -- just under feet
-                                      rootPt.Z + (row - math.floor(math.ceil(math.sqrt(n))/2))*1.5)
-                    data.bp.P=900000; data.bp.D=50000  -- fast to follow
-                    data.bp.MaxForce=Vector3.new(1e13,1e13,1e13)
+                    local cols = math.max(1,math.ceil(math.sqrt(n)))
+                    local col = (i-1)%cols - math.floor(cols/2)
+                    local row = math.floor((i-1)/cols) - math.floor(cols/2)
+                    tgt = Vector3.new(rootPt.X + col*1.5,
+                                      rootPt.Y - 2.8,
+                                      rootPt.Z + row*1.5)
 
                 -- NEW: heart shape
                 elseif mode2=="heart" then
@@ -1988,9 +2056,6 @@ local function main()
                         local targ = findPlayer(petAttackTarget)
                         local targRoot = targ and targ.Character and (targ.Character:FindFirstChild("HumanoidRootPart") or targ.Character:FindFirstChild("Torso"))
                         if targRoot then
-                            -- Rush directly at target
-                            data.bp.P=1e6; data.bp.D=10000
-                            data.bp.MaxForce=Vector3.new(1e13,1e13,1e13)
                             tgt = targRoot.Position
                         else
                             tgt = targetPos + Vector3.new(0,3,0)
@@ -1999,11 +2064,34 @@ local function main()
                         tgt = targetPos + Vector3.new(0,3,0)
                     end
 
-                -- NEW: guard mode — fling anyone near owner except owner
+                -- NEW: guard mode — patrol around owner, rush threats
                 elseif mode2=="guard" then
-                    local phi=(1+math.sqrt(5))/2; local i2=i-1; local s=math.max(n,1)
-                    local theta=math.acos(math.clamp(1-2*(i2+0.5)/s,-1,1)); local ang2=2*math.pi*i2/phi + orbitT*2
-                    tgt=targetPos+Vector3.new(5*math.sin(theta)*math.cos(ang2),5*math.sin(theta)*math.sin(ang2)+2,5*math.cos(theta))
+                    local nearestThreat = nil
+                    local nearestDist   = 20
+                    for _,p2 in ipairs(Players:GetPlayers()) do
+                        if p2 ~= player and not petOwners[p2.Name] then
+                            local ch2 = p2.Character
+                            local tHRP = ch2 and (ch2:FindFirstChild("HumanoidRootPart") or ch2:FindFirstChild("Torso"))
+                            if tHRP then
+                                local d = (tHRP.Position - targetPos).Magnitude
+                                if d < nearestDist then nearestDist=d; nearestThreat=tHRP end
+                            end
+                        end
+                    end
+                    if nearestThreat then
+                        -- Rush intercept: spread blocks around threat position
+                        local spread = Vector3.new(((i-1)%3-1)*1.5, math.floor((i-1)/3)*1.2, 0)
+                        tgt = nearestThreat.Position + spread
+                    else
+                        -- Patrol: tight dynamic orbit around owner, some beside movement
+                        local guardAng = orbitT*2.5 + (i-1)*(math.pi*2/math.max(n,1))
+                        local guardR   = 4 + math.sin(orbitT*1.2+(i-1))*1.5
+                        tgt = targetPos + Vector3.new(
+                            math.cos(guardAng)*guardR,
+                            1 + math.sin(orbitT*1.5+(i-1))*0.8,
+                            math.sin(guardAng)*guardR
+                        )
+                    end
 
                 -- NEW: say mode — form text shape (letter positions)
                 elseif mode2=="say" then
@@ -2022,18 +2110,22 @@ local function main()
                 end
 
                 if tgt then
-                    -- FIX #1: Fast BP movement for pet mode too
-                    data.bp.P=800000; data.bp.D=40000; data.bp.MaxForce=Vector3.new(1e12,1e12,1e12)
                     -- Apply pet spin if any
                     if petSpinSpeed ~= 0 then
                         local phase = i*(math.pi*2/math.max(n,1))
                         local spinAng = orbitT * petSpinSpeed + phase
-                        local spinAxis = Vector3.new(0,1,0)
                         local offset = tgt - targetPos
-                        local rotCF = CFrame.new(targetPos) * CFrame.fromAxisAngle(spinAxis, spinAng)
+                        local rotCF = CFrame.new(targetPos) * CFrame.fromAxisAngle(Vector3.new(0,1,0), spinAng)
                         tgt = rotCF:PointToWorldSpace(offset)
                     end
-                    data.bp.Position=tgt
+                    pcall(function()
+                        if data.bp and data.bp.Parent then
+                            data.bp.P        = 300000
+                            data.bp.D        = 8000
+                            data.bp.MaxForce = Vector3.new(1e9,1e9,1e9)
+                            data.bp.Position = tgt
+                        end
+                    end)
                 end
             end
         end
@@ -2282,92 +2374,84 @@ local function main()
             -- Commands any owner OR script owner can run on their own pet
             if not (isSelf or isOwner) then return end
 
-            -- FIX #3: Script owner with NO owners = control all parts globally
-            -- (was broken before: owner-only gate blocked isSelf commands when no owners)
-            local targetOwner = speakerName
+            -- Helper: set state for the relevant owner(s)
+            -- If script owner with no assigned owners → set global petState
+            -- If script owner WITH assigned owners → set state for all their owners
+            -- If a pet owner → set only their own state
+            local function setState(newState)
+                if isSelf and #petOwnerList == 0 then
+                    petState = newState
+                elseif isSelf then
+                    -- Script owner controls all assigned owners at once
+                    for _,oName in ipairs(petOwnerList) do
+                        petOwnerStates_global[oName] = newState
+                    end
+                else
+                    -- Pet owner controls only their own blocks
+                    petOwnerStates_global[speakerName] = newState
+                end
+            end
 
-            -- Commands valid for self (no owners) or owners
+            -- Commands valid for self or owners
             if lower=="!follow" then
-                if isSelf and #petOwnerList==0 then petState="follow"
-                else if petOwnerStates_global[targetOwner] then petOwnerStates_global[targetOwner]="follow" end end
+                setState("follow")
 
             elseif lower=="!stay" then
+                -- Lock current positions before freezing
                 if isSelf and #petOwnerList==0 then
                     for part,data in pairs(controlled) do
-                        if part and part.Parent and data.bp and data.bp.Parent then data.bp.Position=part.Position end
+                        if part and part.Parent and data.bp and data.bp.Parent then
+                            data.bp.Position = part.Position
+                        end
                     end
-                    petState="stay"
                 else
-                    local parts=petSplitOwners[targetOwner] or {}
-                    for _,part in ipairs(parts) do
-                        local data=controlled[part]
-                        if data and data.bp and data.bp.Parent then data.bp.Position=part.Position end
+                    local targetName = isSelf and petOwnerList[1] or speakerName
+                    for _,part in ipairs(petSplitOwners[targetName] or {}) do
+                        local data = controlled[part]
+                        if data and data.bp and data.bp.Parent then data.bp.Position = part.Position end
                     end
-                    if petOwnerStates_global[targetOwner] then petOwnerStates_global[targetOwner]="stay" end
                 end
+                setState("stay")
 
             elseif lower=="!dance" then
-                if isSelf and #petOwnerList==0 then petState="dance"; petDanceT=0
-                else if petOwnerStates_global[targetOwner] then petOwnerStates_global[targetOwner]="dance"; petDanceT=0 end end
+                petDanceT = 0; setState("dance")
 
             elseif lower=="!orbit" then
-                if isSelf and #petOwnerList==0 then petState="orbit"; petOrbitDist=8
-                else if petOwnerStates_global[targetOwner] then petOwnerStates_global[targetOwner]="orbit" end end
+                petOrbitDist = 8; setState("orbit")
 
             elseif lower:match("^!orbit%s+(%d+)$") then
-                local d=tonumber(lower:match("^!orbit%s+(%d+)$"))
-                if d then
-                    petOrbitDist=d
-                    if isSelf and #petOwnerList==0 then petState="orbit"
-                    else if petOwnerStates_global[targetOwner] then petOwnerStates_global[targetOwner]="orbit" end end
-                end
+                local d = tonumber(lower:match("^!orbit%s+(%d+)$"))
+                if d then petOrbitDist = d; setState("orbit") end
 
-            elseif lower=="!wall" then
-                if isSelf and #petOwnerList==0 then petState="wall"
-                else if petOwnerStates_global[targetOwner] then petOwnerStates_global[targetOwner]="wall" end end
-
-            elseif lower=="!ring" then
-                if isSelf and #petOwnerList==0 then petState="ring"; petOrbitDist=8
-                else if petOwnerStates_global[targetOwner] then petOwnerStates_global[targetOwner]="ring" end end
-
-            elseif lower=="!stop" then
-                if isSelf and #petOwnerList==0 then petState="stop"
-                else if petOwnerStates_global[targetOwner] then petOwnerStates_global[targetOwner]="stop" end end
-
+            elseif lower=="!wall" then setState("wall")
+            elseif lower=="!ring" then petOrbitDist=8; setState("ring")
+            elseif lower=="!stop" then setState("stop")
             elseif lower=="!split" then redistributeParts()
 
-            -- NEW COMMANDS ──────────────────────────────────────────
+            -- NEW COMMANDS
             elseif lower=="!carpet" then
-                local t = isSelf and (#petOwnerList==0 and player.Name or petOwnerList[1]) or targetOwner
-                petCarpetOwners[t]=true
-                if isSelf and #petOwnerList==0 then petState="carpet"
-                else if petOwnerStates_global[t] then petOwnerStates_global[t]="carpet" end end
+                local t = isSelf and (petOwnerList[1] or player.Name) or speakerName
+                petCarpetOwners[t] = true; setState("carpet")
 
             elseif lower=="!uncarpet" then
-                local t = isSelf and (#petOwnerList==0 and player.Name or petOwnerList[1]) or targetOwner
-                petCarpetOwners[t]=nil
-                if isSelf and #petOwnerList==0 then petState="follow"
-                else if petOwnerStates_global[t] then petOwnerStates_global[t]="follow" end end
+                local t = isSelf and (petOwnerList[1] or player.Name) or speakerName
+                petCarpetOwners[t] = nil; removeCarpetBoost(t); setState("follow")
 
-            elseif lower=="!heart" then
-                if isSelf and #petOwnerList==0 then petState="heart"
-                else if petOwnerStates_global[targetOwner] then petOwnerStates_global[targetOwner]="heart" end end
-
-            elseif lower=="!sphere" then
-                if isSelf and #petOwnerList==0 then petState="petsphere"
-                else if petOwnerStates_global[targetOwner] then petOwnerStates_global[targetOwner]="petsphere" end end
+            elseif lower=="!heart" then setState("heart")
+            elseif lower=="!sphere" then setState("petsphere")
 
             elseif lower=="!guard" then
                 petGuardActive = not petGuardActive
-                if isSelf and #petOwnerList==0 then petState = petGuardActive and "guard" or "idle"
-                else if petOwnerStates_global[targetOwner] then petOwnerStates_global[targetOwner] = petGuardActive and "guard" or "follow" end end
+                setState(petGuardActive and "guard" or "follow")
 
             elseif lower=="!unpet" then
-                -- owner can remove their own pet
                 if isOwner then
-                    petOwners[speakerName]=nil
-                    for i,v in ipairs(petOwnerList) do if v==speakerName then table.remove(petOwnerList,i);break end end
-                    petOwnerStates_global[speakerName]=nil; petSplitOwners[speakerName]=nil
+                    petOwners[speakerName] = nil
+                    for idx,v in ipairs(petOwnerList) do
+                        if v == speakerName then table.remove(petOwnerList, idx); break end
+                    end
+                    petOwnerStates_global[speakerName] = nil
+                    petSplitOwners[speakerName] = nil
                     redistributeParts()
                 end
             end
@@ -2603,29 +2687,28 @@ local function main()
                 elseif CFRAME_MODES[activeMode] then targetCF=getFormationCF(activeMode,i,n,pos,cf,t) end
 
                 if targetCF then
-                    -- Clean single-axis spin
-                    local finalCF=targetCF
+                    local finalCF = targetCF
                     if spinSpeed~=0 then
                         local phase=i*(math.pi*2/math.max(n,1))
                         local spinAxis=Vector3.new(math.sin(phase)*0.15,1,math.cos(phase)*0.15).Unit
                         finalCF=CFrame.new(targetCF.Position)*CFrame.fromAxisAngle(spinAxis,spinAngle+phase)
                     end
-                    local data=item.d
-                    -- Skip locked blocks in formation (they hold their position via lockAllNow)
-                    if lockedBlocks then
-                        -- don't move locked blocks in formation
-                    else
+                    local data = item.d
+                    if not lockedBlocks then
                         pcall(function()
                             if data.bp and data.bp.Parent then
-                                -- FIX #1: High P for fast, snappy movement
-                                data.bp.P=800000; data.bp.D=40000
-                                data.bp.MaxForce=Vector3.new(1e12,1e12,1e12)
-                                data.bp.Position=finalCF.Position
-                                if data.bg and data.bg.Parent then data.bg.CFrame=finalCF end
-                            else
-                                part.CFrame=finalCF
-                                part.AssemblyLinearVelocity=Vector3.zero
-                                part.AssemblyAngularVelocity=Vector3.zero
+                                -- Update BP.Position every frame so the physics force is always
+                                -- pointing at the new target — this replicates via network ownership
+                                data.bp.P        = 300000
+                                data.bp.D        = 8000
+                                data.bp.MaxForce = Vector3.new(1e9,1e9,1e9)
+                                data.bp.Position = finalCF.Position
+                            end
+                            if data.bg and data.bg.Parent then
+                                data.bg.P         = 300000
+                                data.bg.D         = 8000
+                                data.bg.MaxTorque = Vector3.new(1e9,1e9,1e9)
+                                data.bg.CFrame    = finalCF
                             end
                         end)
                     end
