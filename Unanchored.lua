@@ -1,5 +1,5 @@
 -- ============================================================
--- UNANCHORED MANIPULATOR KII v16 -- DELTA EXECUTOR
+-- UNANCHORED MANIPULATOR KII v17 -- DELTA EXECUTOR
 -- v13 FIXES:
 --   [1] Unanchored blocks move fast (BP P=800000, D=40000) with
 --       RunService.Heartbeat for smooth ~60fps, no lag.
@@ -21,8 +21,8 @@
 --   !uncarpet           remove carpet mode
 --   !attack <name>      fling targeted player with deadly block
 --   !heart              blocks form heart shape
---   !gotto <name>       swallow owner → carry to target → spit
---   !bring <name>       swallow target player → carry to owner
+--   !gotto <name>       swallow owner - carry to target - spit
+--   !bring <name>       swallow target player - carry to owner
 --   !spin <speed>       set spin speed for pet
 --   !say <text>         blocks form text letters
 --   !sphere             blocks form sphere
@@ -38,7 +38,7 @@ local TweenService     = game:GetService("TweenService")
 
 local player = Players.LocalPlayer
 
--- ── Edge/corner draggable ─────────────────────────────────────
+-- -- Edge/corner draggable -------------------------------------
 local EDGE_MARGIN = 36
 local function makeDraggable(handle, panel, edgeOnly)
     local dragging=false; local dragStartM=Vector2.zero; local dragStartPos=UDim2.new()
@@ -66,9 +66,9 @@ local function makeDraggable(handle, panel, edgeOnly)
 end
 
 local function main()
-    print("[ManipKii v16] "..player.Name)
+    print("[ManipKii v17] "..player.Name)
 
-    -- ── Core state ────────────────────────────────────────────
+    -- -- Core state --------------------------------------------
     local isActivated=false; local activeMode="none"; local lastMode="none"
     local scriptAlive=true; local radius=7; local detectionRange=math.huge
     local pullStrength=50000; local spinSpeed=0; local spinAngle=0
@@ -84,8 +84,148 @@ local function main()
         end
     end
 
-    -- ── Snake / Gaster / Sphere / SphereBender state ──────────
-    local snakeT=0; local snakeHistory={}; local SNAKE_HIST_MAX=600; local SNAKE_GAP=8
+
+    -- Pixel font table (5 rows x 3 cols per char)
+    local PF = {
+        A={{0,1,0},{1,0,1},{1,1,1},{1,0,1},{1,0,1}},
+        B={{1,1,0},{1,0,1},{1,1,0},{1,0,1},{1,1,0}},
+        C={{0,1,1},{1,0,0},{1,0,0},{1,0,0},{0,1,1}},
+        D={{1,1,0},{1,0,1},{1,0,1},{1,0,1},{1,1,0}},
+        E={{1,1,1},{1,0,0},{1,1,0},{1,0,0},{1,1,1}},
+        F={{1,1,1},{1,0,0},{1,1,0},{1,0,0},{1,0,0}},
+        G={{0,1,1},{1,0,0},{1,0,1},{1,0,1},{0,1,1}},
+        H={{1,0,1},{1,0,1},{1,1,1},{1,0,1},{1,0,1}},
+        I={{1,1,1},{0,1,0},{0,1,0},{0,1,0},{1,1,1}},
+        J={{0,0,1},{0,0,1},{0,0,1},{1,0,1},{0,1,1}},
+        K={{1,0,1},{1,1,0},{1,0,0},{1,1,0},{1,0,1}},
+        L={{1,0,0},{1,0,0},{1,0,0},{1,0,0},{1,1,1}},
+        M={{1,0,1},{1,1,1},{1,0,1},{1,0,1},{1,0,1}},
+        N={{1,0,1},{1,1,1},{1,1,1},{1,0,1},{1,0,1}},
+        O={{0,1,0},{1,0,1},{1,0,1},{1,0,1},{0,1,0}},
+        P={{1,1,0},{1,0,1},{1,1,0},{1,0,0},{1,0,0}},
+        Q={{0,1,0},{1,0,1},{1,0,1},{1,1,1},{0,1,1}},
+        R={{1,1,0},{1,0,1},{1,1,0},{1,1,0},{1,0,1}},
+        S={{0,1,1},{1,0,0},{0,1,0},{0,0,1},{1,1,0}},
+        T={{1,1,1},{0,1,0},{0,1,0},{0,1,0},{0,1,0}},
+        U={{1,0,1},{1,0,1},{1,0,1},{1,0,1},{0,1,0}},
+        V={{1,0,1},{1,0,1},{1,0,1},{1,0,1},{0,1,0}},
+        W={{1,0,1},{1,0,1},{1,0,1},{1,1,1},{1,0,1}},
+        X={{1,0,1},{1,0,1},{0,1,0},{1,0,1},{1,0,1}},
+        Y={{1,0,1},{1,0,1},{0,1,0},{0,1,0},{0,1,0}},
+        Z={{1,1,1},{0,0,1},{0,1,0},{1,0,0},{1,1,1}},
+        ["0"]={{0,1,0},{1,0,1},{1,0,1},{1,0,1},{0,1,0}},
+        ["1"]={{0,1,0},{1,1,0},{0,1,0},{0,1,0},{1,1,1}},
+        ["2"]={{1,1,0},{0,0,1},{0,1,0},{1,0,0},{1,1,1}},
+        ["3"]={{1,1,0},{0,0,1},{0,1,0},{0,0,1},{1,1,0}},
+        ["4"]={{1,0,1},{1,0,1},{1,1,1},{0,0,1},{0,0,1}},
+        ["5"]={{1,1,1},{1,0,0},{1,1,0},{0,0,1},{1,1,0}},
+        ["6"]={{0,1,1},{1,0,0},{1,1,0},{1,0,1},{0,1,0}},
+        ["7"]={{1,1,1},{0,0,1},{0,1,0},{0,1,0},{0,1,0}},
+        ["8"]={{0,1,0},{1,0,1},{0,1,0},{1,0,1},{0,1,0}},
+        ["9"]={{0,1,0},{1,0,1},{0,1,1},{0,0,1},{1,1,0}},
+        [" "]={{0,0,0},{0,0,0},{0,0,0},{0,0,0},{0,0,0}},
+        ["!"]={{0,1,0},{0,1,0},{0,1,0},{0,0,0},{0,1,0}},
+        ["?"]={{1,1,0},{0,0,1},{0,1,0},{0,0,0},{0,1,0}},
+    }
+    local function buildSayPositions(text)
+        local positions = {}
+        local txt = text:upper():sub(1,10)
+        local charW = 4
+        local totalW = #txt * charW
+        for ci = 1, #txt do
+            local ch    = txt:sub(ci,ci)
+            local grid  = PF[ch] or PF[" "]
+            local xOff  = (ci-1)*charW - totalW/2
+            for row = 1,5 do
+                for col = 1,3 do
+                    if grid[row] and grid[row][col]==1 then
+                        table.insert(positions, Vector3.new(xOff+(col-1), 5-(row-1), 0))
+                    end
+                end
+            end
+        end
+        return positions
+    end
+
+    -- Titanic blueprint (accurate silhouette, 1:10 scale)
+    local function buildTitanicPositions()
+        local p = {}
+        local function add(x,y,z) table.insert(p,Vector3.new(x,y,z)) end
+        -- Hull bottom plate
+        for xi=-43,43,2 do
+            local mz=4
+            if xi<-35 then mz=math.max(1,4-math.floor((-xi-35)/2)) end
+            if xi>38  then mz=math.max(1,4-math.floor((xi-38)/2))  end
+            for zi=-mz,mz,2 do add(xi,0,zi) end
+        end
+        -- Hull side walls
+        for yi=1,4 do
+            for xi=-43,43,2 do
+                local mz=4
+                if xi<-35 then mz=math.max(1,4-math.floor((-xi-35)/2)) end
+                if xi>38  then mz=math.max(1,4-math.floor((xi-38)/2))  end
+                add(xi,yi,mz); add(xi,yi,-mz)
+            end
+        end
+        -- Bow prow
+        for yi=0,3 do add(-44,yi,0) end
+        -- Stern poop deck
+        for zi=-3,3 do add(40,5,zi); add(41,5,zi); add(42,5,zi) end
+        -- Propellers
+        for pi=1,3 do
+            local pz=(pi-2)*3
+            for ang=0,2 do
+                local a=ang*math.pi*2/3
+                add(43+math.floor(math.cos(a)*2),-1+math.floor(math.sin(a)*2),pz)
+            end
+        end
+        -- Anchors
+        add(-42,3,-5); add(-42,3,5); add(-42,2,-5); add(-42,2,5)
+        -- Main deck
+        for xi=-43,43,2 do for zi=-4,4,2 do add(xi,5,zi) end end
+        -- Deck railing
+        for xi=-43,43,4 do add(xi,6,4); add(xi,6,-4) end
+        -- Superstructure walls
+        for yi=6,9 do
+            for xi=-15,12,2 do add(xi,yi,3); add(xi,yi,-3) end
+            for zi=-3,3 do add(-15,yi,zi); add(12,yi,zi) end
+            for xi=-8,8,8 do for zi=-2,2,2 do add(xi,yi,zi) end end
+        end
+        -- Superstructure top
+        for xi=-15,12,2 do for zi=-3,3,2 do add(xi,10,zi) end end
+        -- Bridge
+        for yi=10,12 do for xi=-14,-10,2 do for zi=-3,3 do add(xi,yi,zi) end end end
+        -- Crow's nest
+        for zi=-1,1 do for xi=-1,1 do add(-38+xi,16,zi) end end
+        -- Funnels (4)
+        for fi=1,4 do
+            local fx=-2+(fi-1)*5
+            for yi=11,18 do
+                add(fx,yi,1); add(fx,yi,-1)
+                add(fx+1,yi,1); add(fx+1,yi,-1)
+            end
+            for zi=-1,1 do for xi=0,1 do add(fx+xi,19,zi) end end
+        end
+        -- Masts
+        for yi=5,22 do add(-38,yi,0) end
+        for yi=5,18 do add(20,yi,0) end
+        for xi=-3,3 do add(-38+xi,18,0) end
+        for xi=-2,2 do add(20+xi,15,0) end
+        -- Lifeboats
+        for xi=-10,10,6 do
+            add(xi,7,5); add(xi,7,-5)
+            add(xi+1,7,5); add(xi+1,7,-5)
+            add(xi,6,5); add(xi,6,-5)
+        end
+        return p
+    end
+    local function getTitanicPositions()
+        if not _titanicPositions then _titanicPositions=buildTitanicPositions() end
+        return _titanicPositions
+    end
+
+    -- -- Snake / Gaster / Sphere / SphereBender state ----------
+    local snakeT=0; local snakeHistory={}; local SNAKE_HIST_MAX=300; local SNAKE_GAP=2
     local gasterAnim="pointing"; local gasterT=0; local gasterSubGui=nil
     local sphereSubGui=nil; local sphereMode="orbit"
     local spherePos=Vector3.new(0,0,0); local sphereVel=Vector3.new(0,0,0); local sphereOrbitAngle=0
@@ -93,7 +233,7 @@ local function main()
     local sbSubGui=nil; local sbSpheres={}
     local function newSBSphere(p) return{pos=p or Vector3.zero,vel=Vector3.zero,orbitAngle=0,mode="orbit",stopped=false,selected=false}end
 
-    -- ── Humanoid freeze/thaw ─────────────────────────────────
+    -- -- Humanoid freeze/thaw ---------------------------------
     local savedWS=16; local savedJP=50; local savedAR=true
     local function freezePlayer(anchorCF)
         local char=player.Character; if not char then return end
@@ -110,7 +250,7 @@ local function main()
         for _,p in ipairs(char:GetDescendants())do if p:IsA("BasePart")then pcall(function()p.CanCollide=true end)end end
     end
 
-    -- ── Tank state ────────────────────────────────────────────
+    -- -- Tank state --------------------------------------------
     local tankSubGui=nil; local tankActive=false
     local cameraOrbitAngle=0; local cameraPitchAngle=math.rad(25)
     local CAM_PITCH_MIN=math.rad(8); local CAM_PITCH_MAX=math.rad(70)
@@ -123,7 +263,7 @@ local function main()
     local rightJoy={active=false,origin=Vector2.zero,current=Vector2.zero,radius=55,deadzone=10,touchId=nil}
     local tankRayParams=RaycastParams.new(); tankRayParams.FilterType=Enum.RaycastFilterType.Exclude
 
-    -- ── Car state ─────────────────────────────────────────────
+    -- -- Car state ---------------------------------------------
     local carSubGui=nil; local carActive=false; local frozenCarCF=nil
     local cs={doorOpen=false,carBase=nil,carDoor=nil,carParts={},partOffsets={},currentSpeed=0,currentTurnSpeed=0}
     local CAR_H=2.8; local CAR_INTERIOR_Y=CAR_H/2+1.8
@@ -131,7 +271,7 @@ local function main()
     local carJoy={active=false,origin=Vector2.zero,current=Vector2.zero,radius=70,deadzone=8,touchId=nil,forward=0,turn=0}
     local carRayParams=RaycastParams.new(); carRayParams.FilterType=Enum.RaycastFilterType.Exclude
 
-    -- ── DE Shrine state ───────────────────────────────────────
+    -- -- DE Shrine state ---------------------------------------
     local shrineSubGui=nil; local shrineActive=false
     -- Phase: "inactive" / "underground" / "closing" / "closed" / "opening"
     local shrinePhase="inactive"
@@ -172,7 +312,7 @@ local function main()
     local slashVelocities    = {}
     local shrinePartList     = {}  -- sorted list of all controlled parts
 
-    -- Assign parts: biggest 20 → shrine structure, next 6 → slashes, rest → sphere wall
+    -- Assign parts: biggest 20 - shrine structure, next 6 - slashes, rest - sphere wall
     local function assignShrineParts()
         shrinePartList={}
         for part,_ in pairs(controlled) do if part and part.Parent then table.insert(shrinePartList,part) end end
@@ -212,7 +352,7 @@ local function main()
         return Vector3.new(shrineCenter.X+r*math.sin(theta)*math.cos(ang),shrineCenter.Y+r*math.sin(theta)*math.sin(ang),shrineCenter.Z+r*math.cos(theta))
     end
 
-    -- ── Gojo state ────────────────────────────────────────────
+    -- -- Gojo state --------------------------------------------
     local gojoSubGui=nil; local gojoActive=false
     -- "idle" / "blue_hold" / "red_charge" / "red_fire" / "purple_split" / "purple_fire" / "de_infinity"
     local gojoState="idle"
@@ -221,21 +361,21 @@ local function main()
     local gojoInfinityAngle=0
     local RED_PART_COUNT=10  -- how many parts reversal red uses
 
-    -- ── Mode tables ───────────────────────────────────────────
+    -- -- Mode tables -------------------------------------------
     local CFRAME_MODES={heart=true,rings=true,wall=true,box=true,gasterhand=true,gaster2hands=true,wings=true,sphere=true,spherebender=true,tank=true,car=true,de_shrine=true,gojo=true,pet=true}
     local GASTER_MODES={gasterhand=true,gaster2hands=true}; local SPHERE_MODES={sphere=true}
     local SPHERE_BENDER_MODES={spherebender=true}; local TANK_MODES={tank=true}
     local CAR_MODES={car=true}; local SHRINE_MODES={de_shrine=true}; local GOJO_MODES={gojo=true}
     local PET_MODES={pet=true}
 
-    -- ── Lock blocks state ─────────────────────────────────────
+    -- -- Lock blocks state -------------------------------------
     -- When enabled: every controlled part has MaxForce cranked to 1e14,
     -- SetNetworkOwner(player) re-asserted each sweep, and CanCollide=false
     -- so nobody can physically shove them.  The BP/BG already resist movement;
     -- the extra MaxForce and ownership re-claim make them immovable.
     local lockedBlocks = false
 
-    -- ── Pet mode state ────────────────────────────────────────
+    -- -- Pet mode state ----------------------------------------
     local petSubGui      = nil
     local petActive      = false
     local petOwners      = {}   -- { [playerName] = true }
@@ -247,16 +387,27 @@ local function main()
     local petSplitOwners = {}   -- for split: {[ownerName]={parts={}}}
     local petGuiUpdateFn = nil  -- set by createPetGui, called to refresh owner list
 
-    -- ── Pet mode state extras for new commands ─────────────────
+    -- -- Pet mode state extras for new commands -----------------
     local petCarpetOwners  = {}  -- {[ownerName]=true} carpet mode per owner
     local petAttackTarget  = nil -- current attack target player name
     local petGuardActive   = false
     local petSpinSpeed     = 0
     local petSayText       = nil  -- nil = no text, string = show text
     local petSphereMode    = false
+    local titanicPos       = Vector3.new(0,0,0)
+    local titanicHeading   = 0
+    local titanicSpeed     = 0
+    local titanicAnchored  = false
+    local _titanicPositions= nil
+    local petSwordTimer    = 0
+    local petSlapTarget    = nil
+    local petSlapTimer     = 0
+    local petThronePos     = nil
+    local petTrailHistory  = {}
+    local petSuckGen       = 0
     local petOwnerStates_global = {}  -- populated inside createPetGui
 
-    -- ── Partial name matcher (2+ chars, case insensitive) ──────
+    -- -- Partial name matcher (2+ chars, case insensitive) ------
     local function findPlayer(query)
         if not query or #query < 1 then return nil end
         local q = query:lower()
@@ -297,16 +448,16 @@ local function main()
     for _,f in ipairs({{0.04,1.5,0.5},{0.08,2.2,0.6},{0.12,2.8,0.7},{0.18,3,0.7},{0.04,0.6,0.5},{0.08,1,0.6},{0.14,1.2,0.6},{0.2,1,0.5}})do table.insert(WING_POINTS,{outX=f[1]*WING_SPAN,upY=f[2],backZ=f[3],layer=3})end
     local WING_POINT_COUNT=#WING_POINTS
 
-    -- ── Part tracking ─────────────────────────────────────────
+    -- -- Part tracking -----------------------------------------
     local controlled={}; local partCount=0
 
-    -- ── Forward declarations ──────────────────────────────────
+    -- -- Forward declarations ----------------------------------
     local sweepMap,fullSweep,rebuildSBGui
     local destroyTank,destroyTankGui,destroyCar,destroyCarGui
     local destroyShrine,destroyShrineGui,destroyGojo,destroyGojoGui
     local destroyPet,destroyPetGui
 
-    -- ── Validation ────────────────────────────────────────────
+    -- -- Validation --------------------------------------------
     local function isValid(obj)
         if not obj then return false end
         local ok=pcall(function()if not obj.Parent then error()end end)
@@ -320,7 +471,7 @@ local function main()
         return true
     end
 
-    -- ── Part grab / release ───────────────────────────────────
+    -- -- Part grab / release -----------------------------------
     local function grabPart(part)
         if controlled[part]then return end
         if not isValid(part)then return end
@@ -334,7 +485,7 @@ local function main()
         -- Set network ownership so our physics forces replicate to server and all clients
         pcall(function()part:SetNetworkOwner(player)end)
         -- Near-zero mass: density 0.01 = minimum allowed in Roblox.
-        -- Less mass means same P value produces ~70x more acceleration → much faster movement
+        -- Less mass means same P value produces ~70x more acceleration - much faster movement
         -- that is still server-visible because it goes through BodyPosition physics.
         pcall(function()
             part.CustomPhysicalProperties = PhysicalProperties.new(0.01,0.3,0.5,1,1)
@@ -465,7 +616,7 @@ local function main()
         end
     end
 
-    -- ── Helpers ───────────────────────────────────────────────
+    -- -- Helpers -----------------------------------------------
     -- Aim direction = character HRP look vector (not camera)
     -- dist = how far in front of the character the target point is
     local function getAimPoint(dist)
@@ -560,7 +711,7 @@ local function main()
         return CFrame.new(cf:PointToWorldSpace(Vector3.new(base.X+sx*math.cos(waveAng)*side,base.Y+sy+floatY,base.Z+sx*math.sin(waveAng)-punchZ+palmOff)))
     end
 
-    -- ── Helper: set block color/material ──────────────────────
+    -- -- Helper: set block color/material ----------------------
     local function colorParts(parts, col, mat)
         for _,part in ipairs(parts)do pcall(function()if part and part.Parent then part.Color=col;part.Material=mat or Enum.Material.Neon end end)end
     end
@@ -576,13 +727,13 @@ local function main()
         end
     end
 
-    -- ── Set BodyPosition on controlled part (used by techniques) ──
+    -- -- Set BodyPosition on controlled part (used by techniques) --
     local function setBP(part, targetPos)
         local data=controlled[part]; if not data then return end
         if data.bp and data.bp.Parent then data.bp.Position=targetPos end
     end
 
-    -- ── Remove BodyPosition/Gyro from a part and give it velocity ──
+    -- -- Remove BodyPosition/Gyro from a part and give it velocity --
     local function firePartVelocity(part, velocity)
         local data=controlled[part]; if not data then return end
         pcall(function()
@@ -603,9 +754,9 @@ local function main()
         end)
     end
 
-    -- ════════════════════════════════════════════════════════════
+    -- ------------------------------------------------------------
     -- TANK (identical to v8)
-    -- ════════════════════════════════════════════════════════════
+    -- ------------------------------------------------------------
     local function buildTankFromParts(position,cf)
         local pl={}
         for part,_ in pairs(controlled)do if part and part.Parent then table.insert(pl,part)end end
@@ -806,9 +957,9 @@ local function main()
         end)
     end
 
-    -- ════════════════════════════════════════════════════════════
+    -- ------------------------------------------------------------
     -- CAR (identical to v8 logic, joystick fixed)
-    -- ════════════════════════════════════════════════════════════
+    -- ------------------------------------------------------------
     local CAR_OFFSETS={CFrame.new(0,0,0),CFrame.new(-5,-1.2,-6.5),CFrame.new(5,-1.2,-6.5),CFrame.new(-5,-1.2,6.5),CFrame.new(5,-1.2,6.5),CFrame.new(-4.8,0.5,-2),CFrame.new(4.8,0.5,-2),CFrame.new(-4.8,0.5,3),CFrame.new(4.8,0.5,3),CFrame.new(0,-0.5,-8.5),CFrame.new(0,-0.5,8.5),CFrame.new(0,1.4,-5),CFrame.new(0,1.4,5),CFrame.new(0,2.8,0),CFrame.new(0,2.4,-3.5),CFrame.new(0,2.4,3.5),CFrame.new(-4,2.4,-2.5),CFrame.new(4,2.4,-2.5),CFrame.new(-4,2.4,2.5),CFrame.new(4,2.4,2.5),CFrame.new(0,0.4,-8),CFrame.new(-2,-1.2,8),CFrame.new(2,-1.2,8),CFrame.new(0,3.2,6),CFrame.new(0,1,-1.5),CFrame.new(-5,1.4,-2.5)}
 
     local function buildCarFromParts(position,cf)
@@ -876,12 +1027,12 @@ local function main()
         pcall(function()workspace.CurrentCamera.CameraType=Enum.CameraType.Custom end)
     end
 
-    -- ════════════════════════════════════════════════════════════
+    -- ------------------------------------------------------------
     -- DE SHRINE (completely reworked)
-    -- Phases: inactive → underground → closing (anim) → closed → opening (anim) → underground
+    -- Phases: inactive - underground - closing (anim) - closed - opening (anim) - underground
     -- All blocks from grabbed world parts.  Shrine structure = biggest 20 parts.
     -- Slashes = next 6 parts.  Sphere wall = remaining parts.
-    -- ════════════════════════════════════════════════════════════
+    -- ------------------------------------------------------------
 
     -- Initialize shrine: sweep ALL blocks, send underground immediately
     local function initDeShrine(pos)
@@ -1107,14 +1258,14 @@ local function main()
         shrineActive=false
     end
 
-    -- ════════════════════════════════════════════════════════════
+    -- ------------------------------------------------------------
     -- GOJO MODE
     -- Max Blue / Reversal Red / Hollow Purple / DE Infinity
     -- All use grabbed unanchored blocks with color changes.
-    -- ════════════════════════════════════════════════════════════
+    -- ------------------------------------------------------------
 
-    -- ── Fling helper ──────────────────────────────────────────
-    -- Uses an Explosion on touch — explosions run server-side in Roblox
+    -- -- Fling helper ------------------------------------------
+    -- Uses an Explosion on touch - explosions run server-side in Roblox
     -- and apply BlastPressure to ALL physics objects including player HRPs,
     -- making this the most reliable way to fling players in FE games.
     local function addFlingOnTouch(part, _flingVelocity)
@@ -1132,7 +1283,7 @@ local function main()
             if myChar and (hit:IsDescendantOf(myChar) or hitChar == myChar) then return end
             fired = true
             pcall(function() conn:Disconnect() end)
-            -- Explosion at impact — BlastPressure flings all nearby physics objects
+            -- Explosion at impact - BlastPressure flings all nearby physics objects
             -- including the player's HumanoidRootPart
             pcall(function()
                 local ex = Instance.new("Explosion")
@@ -1146,15 +1297,15 @@ local function main()
         task.delay(10, function() pcall(function() conn:Disconnect() end) end)
     end
 
-    -- ── Cooldown tracker ─────────────────────────────────────
+    -- -- Cooldown tracker -------------------------------------
     local gojoLastFire = { blue=0, red=0, purple=0 }
     local BLUE_CD   = 12   -- seconds (10s duration + 2s buffer)
     local RED_CD    = 4
     local PURPLE_CD = 6
-    -- FIX #4: Generation counter — increment to kill any running technique thread
+    -- FIX #4: Generation counter - increment to kill any running technique thread
     local gojoGen = 0
 
-    -- ── Max Blue ─────────────────────────────────────────────
+    -- -- Max Blue ---------------------------------------------
     -- Blocks scatter outward then get pulled back to aim point cyclically.
     -- Runs for 10 seconds then auto-stops.
     local blueThread = nil
@@ -1187,7 +1338,7 @@ local function main()
                 local _, aimDir = getAimPoint(1)
                 local aimPt = root.Position + aimDir * 20
 
-                local cycleT = (elapsed % CYCLE) / CYCLE  -- 0→1 per cycle
+                local cycleT = (elapsed % CYCLE) / CYCLE  -- 0-1 per cycle
                 -- First half: scatter outward in a sphere around aim point
                 -- Second half: pull tight to aim point
                 local pullFactor = cycleT < 0.5 and (cycleT * 2) or (1 - (cycleT-0.5)*2)
@@ -1238,7 +1389,7 @@ local function main()
         end
     end
 
-    -- ── Reversal Red ─────────────────────────────────────────
+    -- -- Reversal Red -----------------------------------------
     -- Blocks are sucked from wherever they are to a point directly in front
     -- of the player. On fire they launch forward and fling anyone they hit.
     local function fireReversalRed()
@@ -1273,7 +1424,7 @@ local function main()
             while elapsed < CHARGE and gojoState == "red_charge" and gojoGen == myGen do
                 local dt = task.wait()
                 elapsed  = elapsed + dt
-                local progress = elapsed / CHARGE  -- 0→1
+                local progress = elapsed / CHARGE  -- 0-1
 
                 local char2 = player.Character
                 local root2 = char2 and (char2:FindFirstChild("HumanoidRootPart") or char2:FindFirstChild("Torso"))
@@ -1284,7 +1435,7 @@ local function main()
                 for i, part in ipairs(redParts) do
                     local data = controlled[part]
                     if data and data.bp and data.bp.Parent then
-                        -- Spiral: orbiting radius shrinks toward zero as progress→1
+                        -- Spiral: orbiting radius shrinks toward zero as progress-1
                         local spiralR = (1-progress)*8
                         local spiralAng = progress*math.pi*6 + i*(math.pi*2/#redParts)
                         local offset = Vector3.new(
@@ -1324,7 +1475,7 @@ local function main()
         end)
     end
 
-    -- ── Hollow Purple ────────────────────────────────────────
+    -- -- Hollow Purple ----------------------------------------
     -- Phase 1 (1s): blue group left, red group right.
     -- Phase 2 (0.8s): both converge to aim point (purple).
     -- Phase 3: LAUNCH with massive velocity.
@@ -1466,7 +1617,7 @@ local function main()
         end)
     end
 
-    -- ── DE Infinity ───────────────────────────────────────────
+    -- -- DE Infinity -------------------------------------------
     local function activateDeInfinity(rootPos)
         gojoState = "de_infinity"
         gojoInfinityAngle = 0
@@ -1480,7 +1631,38 @@ local function main()
     end
 
     local function detectAllPartsForGojo()
-        fullSweep()
+        for _,obj in ipairs(workspace:GetDescendants()) do
+            if obj:IsA("BasePart") and not obj.Anchored and not controlled[obj]
+               and obj.Parent and obj.Size.Magnitude >= 0.2 and obj.Transparency < 1 then
+                local isChar=false; local pp=obj.Parent
+                while pp and pp~=workspace do
+                    if pp:FindFirstChildOfClass("Humanoid") then isChar=true; break end
+                    pp=pp.Parent
+                end
+                if not isChar then
+                    pcall(function() obj.CanCollide=false end)
+                    pcall(function() obj:SetNetworkOwner(player) end)
+                    pcall(function()
+                        obj.CustomPhysicalProperties=PhysicalProperties.new(0.01,0.3,0.5,1,1)
+                        obj.Massless=true
+                    end)
+                    if not controlled[obj] then
+                        local origCC=obj.CanCollide; local origAnch=obj.Anchored
+                        local origM=obj.Massless; local origPP=obj.CustomPhysicalProperties
+                        local bp=Instance.new("BodyPosition")
+                        bp.MaxForce=Vector3.new(1e9,1e9,1e9); bp.P=300000; bp.D=8000
+                        bp.Position=obj.Position; bp.Parent=obj
+                        local bg=Instance.new("BodyGyro")
+                        bg.MaxTorque=Vector3.new(1e9,1e9,1e9); bg.P=300000; bg.D=8000
+                        bg.CFrame=obj.CFrame; bg.Parent=obj
+                        controlled[obj]={origCC=origCC,origAnch=origAnch,bp=bp,bg=bg,
+                            origColor=obj.Color,origMaterial=obj.Material,
+                            origMassless=origM,origPhysProps=origPP}
+                        partCount=partCount+1
+                    end
+                end
+            end
+        end
     end
 
     local function updateGojo(dt, rootPos)
@@ -1524,7 +1706,7 @@ local function main()
         end
     end
 
-    -- ── Safe state reset: always callable, clears stuck states ──
+    -- -- Safe state reset: always callable, clears stuck states --
     local function safeResetGojo()
         gojoGen = gojoGen + 1   -- FIX #4: invalidate all running technique threads
         gojoState  = "idle"
@@ -1538,9 +1720,9 @@ local function main()
         gojoActive=false
     end
 
-    -- ════════════════════════════════════════════════════════════
+    -- ------------------------------------------------------------
     -- SUB-GUIS
-    -- ════════════════════════════════════════════════════════════
+    -- ------------------------------------------------------------
 
     local function destroyGasterGui() if gasterSubGui and gasterSubGui.Parent then gasterSubGui:Destroy()end;gasterSubGui=nil end
     local function createGasterGui()
@@ -1611,7 +1793,7 @@ local function main()
         panel.Size=UDim2.fromOffset(W,yOff+8);makeDraggable(tBar,panel,false)
     end
 
-    -- ── Tank GUI ──────────────────────────────────────────────
+    -- -- Tank GUI ----------------------------------------------
     destroyTankGui=function() if tankSubGui and tankSubGui.Parent then tankSubGui:Destroy()end;tankSubGui=nil end
     local function createTankGui()
         destroyTankGui()
@@ -1619,12 +1801,12 @@ local function main()
         local sg=Instance.new("ScreenGui");sg.Name="TankSubGUI";sg.ResetOnSpawn=false;sg.DisplayOrder=1000;sg.ZIndexBehavior=Enum.ZIndexBehavior.Sibling;sg.Parent=pg;tankSubGui=sg
         local panel=Instance.new("Frame");panel.Size=UDim2.fromOffset(185,280);panel.Position=UDim2.new(0,10,0.5,-140);panel.BackgroundColor3=Color3.fromRGB(18,18,18);panel.BorderSizePixel=0;panel.Parent=sg;Instance.new("UICorner",panel).CornerRadius=UDim.new(0,8);local stk=Instance.new("UIStroke",panel);stk.Color=Color3.fromRGB(90,90,90);stk.Thickness=1.5
         local titleBar=Instance.new("Frame");titleBar.Size=UDim2.new(1,0,0,28);titleBar.BackgroundColor3=Color3.fromRGB(30,30,30);titleBar.BorderSizePixel=0;titleBar.ZIndex=10;titleBar.Parent=panel;Instance.new("UICorner",titleBar).CornerRadius=UDim.new(0,8)
-        local tLbl=Instance.new("TextLabel",titleBar);tLbl.Text="🪖 TANK";tLbl.Size=UDim2.new(1,-8,1,0);tLbl.Position=UDim2.fromOffset(8,0);tLbl.BackgroundTransparency=1;tLbl.TextColor3=Color3.fromRGB(210,210,210);tLbl.TextSize=12;tLbl.Font=Enum.Font.GothamBold;tLbl.TextXAlignment=Enum.TextXAlignment.Left;tLbl.ZIndex=10
+        local tLbl=Instance.new("TextLabel",titleBar);tLbl.Text="- TANK";tLbl.Size=UDim2.new(1,-8,1,0);tLbl.Position=UDim2.fromOffset(8,0);tLbl.BackgroundTransparency=1;tLbl.TextColor3=Color3.fromRGB(210,210,210);tLbl.TextSize=12;tLbl.Font=Enum.Font.GothamBold;tLbl.TextXAlignment=Enum.TextXAlignment.Left;tLbl.ZIndex=10
         local sLbl=Instance.new("TextLabel",panel);sLbl.Text="INSIDE  |  READY";sLbl.Size=UDim2.new(1,-10,0,16);sLbl.Position=UDim2.fromOffset(6,30);sLbl.BackgroundTransparency=1;sLbl.TextColor3=Color3.fromRGB(130,200,130);sLbl.TextSize=9;sLbl.Font=Enum.Font.GothamBold;sLbl.TextXAlignment=Enum.TextXAlignment.Left
         local dLbl=Instance.new("TextLabel",panel);dLbl.Text="MOVEMENT";dLbl.Size=UDim2.new(1,-10,0,12);dLbl.Position=UDim2.fromOffset(6,49);dLbl.BackgroundTransparency=1;dLbl.TextColor3=Color3.fromRGB(100,100,150);dLbl.TextSize=8;dLbl.Font=Enum.Font.GothamBold;dLbl.TextXAlignment=Enum.TextXAlignment.Left
         local cx=(185-36)/2;local dy0=63;local bs=36;local gap=2
         local function dpBtn(t2,xp,yp)local b=Instance.new("TextButton",panel);b.Text=t2;b.Size=UDim2.fromOffset(bs,bs);b.Position=UDim2.fromOffset(xp,yp);b.BackgroundColor3=Color3.fromRGB(40,40,55);b.TextColor3=Color3.fromRGB(200,200,255);b.TextSize=16;b.Font=Enum.Font.GothamBold;b.BorderSizePixel=0;Instance.new("UICorner",b).CornerRadius=UDim.new(0,6);Instance.new("UIStroke",b).Color=Color3.fromRGB(80,80,130);return b end
-        local upBtn=dpBtn("▲",cx,dy0);local leftBtn=dpBtn("◀",cx-bs-gap,dy0+bs+gap);local rightBtn=dpBtn("▶",cx+bs+gap,dy0+bs+gap);local downBtn=dpBtn("▼",cx,dy0+bs*2+gap*2)
+        local upBtn=dpBtn("-",cx,dy0);local leftBtn=dpBtn("-",cx-bs-gap,dy0+bs+gap);local rightBtn=dpBtn("-",cx+bs+gap,dy0+bs+gap);local downBtn=dpBtn("-",cx,dy0+bs*2+gap*2)
         local function setP(btn,on)btn.BackgroundColor3=on and Color3.fromRGB(60,60,100) or Color3.fromRGB(40,40,55)end
         upBtn.MouseButton1Down:Connect(function()tks.forward=1;setP(upBtn,true)end);upBtn.MouseButton1Up:Connect(function()tks.forward=0;setP(upBtn,false)end)
         downBtn.MouseButton1Down:Connect(function()tks.forward=-1;setP(downBtn,true)end);downBtn.MouseButton1Up:Connect(function()tks.forward=0;setP(downBtn,false)end)
@@ -1632,11 +1814,11 @@ local function main()
         rightBtn.MouseButton1Down:Connect(function()tks.turn=1;setP(rightBtn,true)end);rightBtn.MouseButton1Up:Connect(function()tks.turn=0;setP(rightBtn,false)end)
         local ay=dy0+bs*3+gap*2+10
         local function aBtn(t2,yp,bg,fg)local b=Instance.new("TextButton",panel);b.Text=t2;b.Size=UDim2.new(1,-12,0,28);b.Position=UDim2.fromOffset(6,yp);b.BackgroundColor3=bg;b.TextColor3=fg;b.TextSize=11;b.Font=Enum.Font.GothamBold;b.BorderSizePixel=0;Instance.new("UICorner",b);return b end
-        local fireBtn=aBtn("🔥 FIRE",ay,Color3.fromRGB(65,35,12),Color3.fromRGB(255,200,80))
-        local hatchBtn=aBtn("🚪 OPEN HATCH",ay+32,Color3.fromRGB(30,45,60),Color3.fromRGB(120,200,255))
-        local destructBtn=aBtn("💥 DESTRUCT",ay+64,Color3.fromRGB(75,12,12),Color3.fromRGB(255,80,80))
+        local fireBtn=aBtn("- FIRE",ay,Color3.fromRGB(65,35,12),Color3.fromRGB(255,200,80))
+        local hatchBtn=aBtn("- OPEN HATCH",ay+32,Color3.fromRGB(30,45,60),Color3.fromRGB(120,200,255))
+        local destructBtn=aBtn("- DESTRUCT",ay+64,Color3.fromRGB(75,12,12),Color3.fromRGB(255,80,80))
         fireBtn.MouseButton1Click:Connect(function()shootProjectile();sLbl.Text="FIRING!";sLbl.TextColor3=Color3.fromRGB(255,200,80);task.wait(0.4);if sLbl.Parent then sLbl.Text="INSIDE  |  READY";sLbl.TextColor3=Color3.fromRGB(130,200,130)end end)
-        hatchBtn.MouseButton1Click:Connect(function()toggleHatch();if tks.hatchOpen then hatchBtn.Text="🚪 CLOSE HATCH";sLbl.Text="OUTSIDE  |  FREE";sLbl.TextColor3=Color3.fromRGB(200,200,100) else hatchBtn.Text="🚪 OPEN HATCH";sLbl.Text="INSIDE  |  READY";sLbl.TextColor3=Color3.fromRGB(130,200,130)end end)
+        hatchBtn.MouseButton1Click:Connect(function()toggleHatch();if tks.hatchOpen then hatchBtn.Text="- CLOSE HATCH";sLbl.Text="OUTSIDE  |  FREE";sLbl.TextColor3=Color3.fromRGB(200,200,100) else hatchBtn.Text="- OPEN HATCH";sLbl.Text="INSIDE  |  READY";sLbl.TextColor3=Color3.fromRGB(130,200,130)end end)
         destructBtn.MouseButton1Click:Connect(function()task.spawn(function()destroyTank();destroyTankGui()end)end)
         local jR=rightJoy.radius
         local jBase=Instance.new("Frame",sg);jBase.Size=UDim2.fromOffset(jR*2,jR*2);jBase.Position=UDim2.new(1,-(jR*2+18),0.36,-jR);jBase.BackgroundColor3=Color3.fromRGB(50,50,80);jBase.BackgroundTransparency=0.35;jBase.BorderSizePixel=0;Instance.new("UICorner",jBase).CornerRadius=UDim.new(1,0);local jStk=Instance.new("UIStroke",jBase);jStk.Color=Color3.fromRGB(100,120,200);jStk.Thickness=1.5
@@ -1652,7 +1834,7 @@ local function main()
         makeDraggable(titleBar,panel,false)
     end
 
-    -- ── Car GUI (FIXED JOYSTICK: frame InputBegan, not UserInputService) ──
+    -- -- Car GUI (FIXED JOYSTICK: frame InputBegan, not UserInputService) --
     destroyCarGui=function() if carSubGui and carSubGui.Parent then carSubGui:Destroy()end;carSubGui=nil end
     local function createCarGui()
         destroyCarGui()
@@ -1660,12 +1842,12 @@ local function main()
         local sg=Instance.new("ScreenGui");sg.Name="CarSubGUI";sg.ResetOnSpawn=false;sg.DisplayOrder=1000;sg.ZIndexBehavior=Enum.ZIndexBehavior.Sibling;sg.Parent=pg;carSubGui=sg
         local panel=Instance.new("Frame");panel.Size=UDim2.fromOffset(165,130);panel.Position=UDim2.new(0,10,0.5,-65);panel.BackgroundColor3=Color3.fromRGB(14,18,14);panel.BorderSizePixel=0;panel.Parent=sg;Instance.new("UICorner",panel).CornerRadius=UDim.new(0,8);local stk=Instance.new("UIStroke",panel);stk.Color=Color3.fromRGB(60,160,60);stk.Thickness=1.5
         local titleBar=Instance.new("Frame");titleBar.Size=UDim2.new(1,0,0,28);titleBar.BackgroundColor3=Color3.fromRGB(20,35,20);titleBar.BorderSizePixel=0;titleBar.ZIndex=10;titleBar.Parent=panel;Instance.new("UICorner",titleBar).CornerRadius=UDim.new(0,8)
-        local tLbl=Instance.new("TextLabel",titleBar);tLbl.Text="🚗 CAR";tLbl.Size=UDim2.new(1,-8,1,0);tLbl.Position=UDim2.fromOffset(8,0);tLbl.BackgroundTransparency=1;tLbl.TextColor3=Color3.fromRGB(120,220,120);tLbl.TextSize=12;tLbl.Font=Enum.Font.GothamBold;tLbl.TextXAlignment=Enum.TextXAlignment.Left;tLbl.ZIndex=10
+        local tLbl=Instance.new("TextLabel",titleBar);tLbl.Text="- CAR";tLbl.Size=UDim2.new(1,-8,1,0);tLbl.Position=UDim2.fromOffset(8,0);tLbl.BackgroundTransparency=1;tLbl.TextColor3=Color3.fromRGB(120,220,120);tLbl.TextSize=12;tLbl.Font=Enum.Font.GothamBold;tLbl.TextXAlignment=Enum.TextXAlignment.Left;tLbl.ZIndex=10
         local sLbl=Instance.new("TextLabel",panel);sLbl.Text="PARKED  |  OPEN DOOR";sLbl.Size=UDim2.new(1,-10,0,16);sLbl.Position=UDim2.fromOffset(6,30);sLbl.BackgroundTransparency=1;sLbl.TextColor3=Color3.fromRGB(180,180,100);sLbl.TextSize=9;sLbl.Font=Enum.Font.GothamBold;sLbl.TextXAlignment=Enum.TextXAlignment.Left
         local function aBtn2(t2,yp,bg,fg)local b=Instance.new("TextButton",panel);b.Text=t2;b.Size=UDim2.new(1,-12,0,30);b.Position=UDim2.fromOffset(6,yp);b.BackgroundColor3=bg;b.TextColor3=fg;b.TextSize=11;b.Font=Enum.Font.GothamBold;b.BorderSizePixel=0;Instance.new("UICorner",b);return b end
-        local doorBtn=aBtn2("🚪 OPEN DOOR",50,Color3.fromRGB(25,45,25),Color3.fromRGB(80,240,80))
-        local destBtn=aBtn2("🔧 DESTROY",86,Color3.fromRGB(70,10,10),Color3.fromRGB(255,70,70))
-        doorBtn.MouseButton1Click:Connect(function()toggleCarDoor();if cs.doorOpen then doorBtn.Text="🚪 CLOSE DOOR";sLbl.Text="DRIVING  |  INSIDE";sLbl.TextColor3=Color3.fromRGB(100,230,100) else doorBtn.Text="🚪 OPEN DOOR";sLbl.Text="PARKED  |  OPEN DOOR";sLbl.TextColor3=Color3.fromRGB(180,180,100)end end)
+        local doorBtn=aBtn2("- OPEN DOOR",50,Color3.fromRGB(25,45,25),Color3.fromRGB(80,240,80))
+        local destBtn=aBtn2("- DESTROY",86,Color3.fromRGB(70,10,10),Color3.fromRGB(255,70,70))
+        doorBtn.MouseButton1Click:Connect(function()toggleCarDoor();if cs.doorOpen then doorBtn.Text="- CLOSE DOOR";sLbl.Text="DRIVING  |  INSIDE";sLbl.TextColor3=Color3.fromRGB(100,230,100) else doorBtn.Text="- OPEN DOOR";sLbl.Text="PARKED  |  OPEN DOOR";sLbl.TextColor3=Color3.fromRGB(180,180,100)end end)
         destBtn.MouseButton1Click:Connect(function()task.spawn(function()destroyCar();destroyCarGui()end)end)
 
         -- Drive joystick (left side, large, sensitive)
@@ -1720,7 +1902,7 @@ local function main()
         makeDraggable(titleBar,panel,false)
     end
 
-    -- ── DE Shrine GUI ─────────────────────────────────────────
+    -- -- DE Shrine GUI -----------------------------------------
     destroyShrineGui=function() if shrineSubGui and shrineSubGui.Parent then shrineSubGui:Destroy()end;shrineSubGui=nil end
     local function createShrineGui()
         destroyShrineGui()
@@ -1728,7 +1910,7 @@ local function main()
         local sg=Instance.new("ScreenGui");sg.Name="ShrineSubGUI";sg.ResetOnSpawn=false;sg.DisplayOrder=1000;sg.ZIndexBehavior=Enum.ZIndexBehavior.Sibling;sg.Parent=pg;shrineSubGui=sg
         local panel=Instance.new("Frame");panel.Size=UDim2.fromOffset(175,150);panel.Position=UDim2.new(0,10,0.5,-75);panel.BackgroundColor3=Color3.fromRGB(12,4,4);panel.BorderSizePixel=0;panel.Parent=sg;Instance.new("UICorner",panel).CornerRadius=UDim.new(0,8);local stk=Instance.new("UIStroke",panel);stk.Color=Color3.fromRGB(180,20,20);stk.Thickness=1.5
         local titleBar=Instance.new("Frame");titleBar.Size=UDim2.new(1,0,0,28);titleBar.BackgroundColor3=Color3.fromRGB(40,8,8);titleBar.BorderSizePixel=0;titleBar.ZIndex=10;titleBar.Parent=panel;Instance.new("UICorner",titleBar).CornerRadius=UDim.new(0,8)
-        local tLbl=Instance.new("TextLabel",titleBar);tLbl.Text="⛩ DE SHRINE";tLbl.Size=UDim2.new(1,-8,1,0);tLbl.Position=UDim2.fromOffset(8,0);tLbl.BackgroundTransparency=1;tLbl.TextColor3=Color3.fromRGB(255,80,50);tLbl.TextSize=12;tLbl.Font=Enum.Font.GothamBold;tLbl.TextXAlignment=Enum.TextXAlignment.Left;tLbl.ZIndex=10
+        local tLbl=Instance.new("TextLabel",titleBar);tLbl.Text="- DE SHRINE";tLbl.Size=UDim2.new(1,-8,1,0);tLbl.Position=UDim2.fromOffset(8,0);tLbl.BackgroundTransparency=1;tLbl.TextColor3=Color3.fromRGB(255,80,50);tLbl.TextSize=12;tLbl.Font=Enum.Font.GothamBold;tLbl.TextXAlignment=Enum.TextXAlignment.Left;tLbl.ZIndex=10
         local sLbl=Instance.new("TextLabel",panel);sLbl.Text="BLOCKS UNDERGROUND";sLbl.Size=UDim2.new(1,-10,0,16);sLbl.Position=UDim2.fromOffset(6,31);sLbl.BackgroundTransparency=1;sLbl.TextColor3=Color3.fromRGB(130,130,130);sLbl.TextSize=9;sLbl.Font=Enum.Font.GothamBold;sLbl.TextXAlignment=Enum.TextXAlignment.Left
         local pLbl=Instance.new("TextLabel",panel);pLbl.Text="PARTS: "..partCount;pLbl.Size=UDim2.new(1,-10,0,14);pLbl.Position=UDim2.fromOffset(6,49);pLbl.BackgroundTransparency=1;pLbl.TextColor3=Color3.fromRGB(100,100,160);pLbl.TextSize=9;pLbl.Font=Enum.Font.Gotham;pLbl.TextXAlignment=Enum.TextXAlignment.Left
         task.spawn(function()
@@ -1742,11 +1924,11 @@ local function main()
             end
         end)
         local function aBtn3(t2,yp,bg,fg)local b=Instance.new("TextButton",panel);b.Text=t2;b.Size=UDim2.new(1,-12,0,32);b.Position=UDim2.fromOffset(6,yp);b.BackgroundColor3=bg;b.TextColor3=fg;b.TextSize=11;b.Font=Enum.Font.GothamBold;b.BorderSizePixel=0;Instance.new("UICorner",b);return b end
-        local closeBtn2=aBtn3("🔒 CLOSE DOMAIN",68,Color3.fromRGB(60,15,8),Color3.fromRGB(255,100,60))
-        local cancelBtn=aBtn3("💀 CANCEL",104,Color3.fromRGB(60,10,10),Color3.fromRGB(255,60,60))
+        local closeBtn2=aBtn3("- CLOSE DOMAIN",68,Color3.fromRGB(60,15,8),Color3.fromRGB(255,100,60))
+        local cancelBtn=aBtn3("- CANCEL",104,Color3.fromRGB(60,10,10),Color3.fromRGB(255,60,60))
         closeBtn2.MouseButton1Click:Connect(function()
-            if shrinePhase=="underground" then closeDomain(); closeBtn2.Text="🔓 OPEN DOMAIN"
-            elseif shrinePhase=="closed"  then openDomain();  closeBtn2.Text="🔒 CLOSE DOMAIN" end
+            if shrinePhase=="underground" then closeDomain(); closeBtn2.Text="- OPEN DOMAIN"
+            elseif shrinePhase=="closed"  then openDomain();  closeBtn2.Text="- CLOSE DOMAIN" end
         end)
         cancelBtn.MouseButton1Click:Connect(function()
             destroyShrine(); destroyShrineGui(); activeMode="none"; isActivated=false
@@ -1754,10 +1936,10 @@ local function main()
         makeDraggable(titleBar,panel,false)
     end
 
-    -- ════════════════════════════════════════════════════════════
+    -- ------------------------------------------------------------
     -- PET MODE
     -- Chat commands: !pet <name>  then  !follow/!stay/!dance etc.
-    -- ════════════════════════════════════════════════════════════
+    -- ------------------------------------------------------------
 
     -- Get all parts assigned to an owner (for split mode)
     local function getPetPartsForOwner(ownerName)
@@ -1778,51 +1960,39 @@ local function main()
         end
     end
 
-    -- ── Pet attack: blocks rush at target, on touch set huge velocity on target ──
-    local petAttackFired = false
+    -- -- Pet attack: blocks rush at target, on touch set huge velocity on target --
+    local petAttackFired=false; local petAttackConns={}
+    local function clearAttackConns()
+        for _,c in ipairs(petAttackConns) do pcall(function()c:Disconnect()end) end
+        petAttackConns={}
+    end
     local function doPetAttackFling()
         if petAttackFired then return end
-        local targ = petAttackTarget and findPlayer(petAttackTarget)
-        if not targ then return end
-        local targChar = targ.Character
-        if not targChar then return end
-        local targHRP = targChar:FindFirstChild("HumanoidRootPart") or targChar:FindFirstChild("Torso")
+        local targ=petAttackTarget and findPlayer(petAttackTarget); if not targ then return end
+        local targChar=targ.Character; if not targChar then return end
+        local targHRP=targChar:FindFirstChild("HumanoidRootPart") or targChar:FindFirstChild("Torso")
         if not targHRP then return end
-
-        -- Connect Touched on all controlled parts — when a block reaches target, fling them
+        clearAttackConns()
         for part,_ in pairs(controlled) do
             if part and part.Parent then
-                local conn; conn = part.Touched:Connect(function(hit)
+                local conn; conn=part.Touched:Connect(function(hit)
                     if petAttackFired then pcall(function()conn:Disconnect()end); return end
-                    if not hit then return end
-                    -- Check if hit is part of target
-                    local hitChar = hit.Parent
-                    if hitChar ~= targChar and not hit:IsDescendantOf(targChar) then return end
-                    petAttackFired = true
-                    pcall(function()conn:Disconnect()end)
-                    -- Direct velocity fling — works client-side
+                    if not hit or not hit:IsDescendantOf(targChar) then return end
+                    petAttackFired=true; clearAttackConns()
                     pcall(function()
-                        targHRP.AssemblyLinearVelocity = Vector3.new(
-                            math.random(-1,1)*80,
-                            120,
-                            math.random(-1,1)*80
-                        )
-                    end)
-                    -- Also try BodyVelocity as backup
-                    pcall(function()
-                        local bv = Instance.new("BodyVelocity")
-                        bv.MaxForce = Vector3.new(1e9,1e9,1e9)
-                        bv.Velocity = Vector3.new(math.random(-1,1)*80, 120, math.random(-1,1)*80)
-                        bv.Parent = targHRP
-                        game:GetService("Debris"):AddItem(bv, 0.3)
+                        local bv=Instance.new("BodyVelocity")
+                        bv.MaxForce=Vector3.new(1e9,1e9,1e9)
+                        bv.Velocity=Vector3.new((math.random(0,1)*2-1)*120,150,(math.random(0,1)*2-1)*120)
+                        bv.Parent=targHRP; Debris:AddItem(bv,0.25)
                     end)
                 end)
-                task.delay(8, function() pcall(function()conn:Disconnect()end) end)
+                table.insert(petAttackConns,conn)
+                task.delay(10,function() pcall(function()conn:Disconnect()end) end)
             end
         end
     end
 
-    -- ── Pet guard: fling anyone near owner except owners/self ────
+    -- -- Pet guard: fling anyone near owner except owners/self ----
     local petGuardLastFling = 0
     local function doPetGuard(ownerPos)
         local now = tick()
@@ -1853,7 +2023,7 @@ local function main()
         end
     end
 
-    -- ── Pet carpet speed boost ────────────────────────────────────
+    -- -- Pet carpet speed boost ------------------------------------
     local petCarpetSpeedSet = {}
     local function applyCarpetBoost(ownerName)
         local p2 = findPlayer(ownerName); if not p2 then return end
@@ -1874,84 +2044,54 @@ local function main()
         end
     end
 
-    -- ── Pet gotto: cage owner in sphere → carry to target → release ──
-    local petGottoActive = false
+    local petGottoActive=false
     function petGotto(targetPlayer)
-        if petGottoActive then return end
-        petGottoActive = true
-        local prevState    = petState
-        local prevOrbitDst = petOrbitDist
-        local ownerName = petOwnerList[1] or player.Name
-        local ownerP    = findPlayer(ownerName)
+        if petGottoActive then return end; petGottoActive=true
+        local prevState=petState; local prevOrbitDst=petOrbitDist
+        local ownerName=petOwnerList[1] or player.Name
+        local ownerP=findPlayer(ownerName)
         if not ownerP then petGottoActive=false; return end
-        local ownerChar = ownerP.Character
-        if not ownerChar then petGottoActive=false; return end
-        local ownerHRP  = ownerChar:FindFirstChild("HumanoidRootPart") or ownerChar:FindFirstChild("Torso")
+        local ownerChar=ownerP.Character; if not ownerChar then petGottoActive=false; return end
+        local ownerHRP=ownerChar:FindFirstChild("HumanoidRootPart") or ownerChar:FindFirstChild("Torso")
         if not ownerHRP then petGottoActive=false; return end
-        -- Phase 1: shrink sphere tightly around owner (cage)
-        petOrbitDist = 3; petState = "petsphere"
-        task.wait(1.2)
-        -- Phase 2: carry owner (teleport in steps), sphere stays around them
-        local targChar = targetPlayer.Character
-        local targHRP  = targChar and (targChar:FindFirstChild("HumanoidRootPart") or targChar:FindFirstChild("Torso"))
+        petOrbitDist=3; petState="petsphere"; task.wait(1.0)
+        local targChar=targetPlayer.Character
+        local targHRP=targChar and (targChar:FindFirstChild("HumanoidRootPart") or targChar:FindFirstChild("Torso"))
         if targHRP then
-            local startPos = ownerHRP.Position
-            local endPos   = targHRP.Position + Vector3.new(0, 0, 3)
-            for step = 1, 30 do
-                if not petGottoActive then break end
-                local alpha = step / 30
-                pcall(function()
-                    ownerHRP.CFrame = CFrame.new(startPos:Lerp(endPos, alpha))
-                end)
-                task.wait(0.04)
-            end
+            local bv=Instance.new("BodyPosition")
+            bv.MaxForce=Vector3.new(1e8,1e8,1e8); bv.P=80000; bv.D=3000
+            bv.Position=targHRP.Position+Vector3.new(0,0,3); bv.Parent=ownerHRP
+            for _=1,40 do if not petGottoActive then break end; task.wait(0.05) end
+            pcall(function()bv:Destroy()end)
         end
-        -- Phase 3: spit/scatter
-        petOrbitDist = prevOrbitDst; petState = "dance"
-        task.wait(0.5)
-        petState = prevState; petGottoActive = false
+        petOrbitDist=prevOrbitDst; petState="dance"; task.wait(0.4)
+        petState=prevState; petGottoActive=false
     end
 
-    -- ── Pet bring: fly blocks to target, cage them, carry to owner ──
-    local petBringActive = false
+    local petBringActive=false
     function petBring(targetPlayer)
-        if petBringActive then return end
-        petBringActive = true
-        local prevState    = petState
-        local prevOrbitDst = petOrbitDist
-        local targChar = targetPlayer.Character
-        if not targChar then petBringActive=false; return end
-        local targHRP = targChar:FindFirstChild("HumanoidRootPart") or targChar:FindFirstChild("Torso")
+        if petBringActive then return end; petBringActive=true
+        local prevState=petState; local prevOrbitDst=petOrbitDist
+        local targChar=targetPlayer.Character; if not targChar then petBringActive=false; return end
+        local targHRP=targChar:FindFirstChild("HumanoidRootPart") or targChar:FindFirstChild("Torso")
         if not targHRP then petBringActive=false; return end
-        local ownerName = petOwnerList[1] or player.Name
-        local ownerP    = findPlayer(ownerName)
-        local ownerChar = ownerP and ownerP.Character
-        local ownerHRP  = ownerChar and (ownerChar:FindFirstChild("HumanoidRootPart") or ownerChar:FindFirstChild("Torso"))
-        -- Phase 1: temporarily change "targetPos" to target player — do this by
-        --          overriding petOwnerList temporarily so blocks orbit target
-        local savedList = petOwnerList
-        petOwnerList = {targetPlayer.Name}; petOwnerStates_global[targetPlayer.Name] = "petsphere"
-        petOrbitDist = 3; petState = "petsphere"
-        task.wait(1.2)  -- cage around target
-        -- Phase 2: carry target to owner in steps
+        local ownerName=petOwnerList[1] or player.Name
+        local ownerP=findPlayer(ownerName)
+        local ownerChar=ownerP and ownerP.Character
+        local ownerHRP=ownerChar and (ownerChar:FindFirstChild("HumanoidRootPart") or ownerChar:FindFirstChild("Torso"))
+        local savedList=petOwnerList
+        petOwnerList={targetPlayer.Name}; petOwnerStates_global[targetPlayer.Name]="petsphere"
+        petOrbitDist=3; petState="petsphere"; task.wait(1.0)
         if ownerHRP then
-            local startPos = targHRP.Position
-            local endPos   = ownerHRP.Position + Vector3.new(2, 0, 2)
-            for step = 1, 30 do
-                if not petBringActive then break end
-                local alpha = step / 30
-                pcall(function()
-                    targHRP.CFrame = CFrame.new(startPos:Lerp(endPos, alpha))
-                end)
-                task.wait(0.04)
-            end
+            local bv=Instance.new("BodyPosition")
+            bv.MaxForce=Vector3.new(1e8,1e8,1e8); bv.P=80000; bv.D=3000
+            bv.Position=ownerHRP.Position+Vector3.new(3,0,0); bv.Parent=targHRP
+            for _=1,40 do if not petBringActive then break end; task.wait(0.05) end
+            pcall(function()bv:Destroy()end)
         end
-        -- Phase 3: release / scatter
-        petOwnerList = savedList
-        petOwnerStates_global[targetPlayer.Name] = nil
-        petOrbitDist = prevOrbitDst; petState = "dance"
-        task.wait(0.5)
-        petState = prevState; petBringActive = false
+        petOwnerList=savedList; petOwnerStates_global[targetPlayer.Name]=nil
+        petOrbitDist=prevOrbitDst; petState="dance"; task.wait(0.4)
+        petState=prevState; petBringActive=false
     end
 
     local function updatePet(dt, rootPos)
@@ -1970,6 +2110,7 @@ local function main()
         end
 
         local function moveParts(parts, targetPos, orbitDist, orbitT, mode2)
+            orbitT = orbitT * (1 + math.max(0, petSpinSpeed))
             local n=math.max(#parts,1)
             for i,part in ipairs(parts) do
                 local data=controlled[part]; if not(data and data.bp and data.bp.Parent) then return end
@@ -2027,7 +2168,7 @@ local function main()
                     part.AssemblyAngularVelocity = Vector3.zero
                     tgt = part.Position  -- keep exactly where it is now
 
-                -- NEW: carpet mode — flat under owner's feet
+                -- NEW: carpet mode - flat under owner's feet
                 elseif mode2=="carpet" then
                     local rootPt = targetPos
                     local cols = math.max(1,math.ceil(math.sqrt(n)))
@@ -2050,7 +2191,7 @@ local function main()
                     local r=petOrbitDist
                     tgt=targetPos+Vector3.new(r*math.sin(theta)*math.cos(ang2+orbitT*0.5),r*math.sin(theta)*math.sin(ang2+orbitT*0.5)+2,r*math.cos(theta))
 
-                -- NEW: attack mode — converge on attack target then fling
+                -- NEW: attack mode - converge on attack target then fling
                 elseif mode2=="attack" then
                     if petAttackTarget then
                         local targ = findPlayer(petAttackTarget)
@@ -2064,7 +2205,7 @@ local function main()
                         tgt = targetPos + Vector3.new(0,3,0)
                     end
 
-                -- NEW: guard mode — patrol around owner, rush threats
+                -- NEW: guard mode - patrol around owner, rush threats
                 elseif mode2=="guard" then
                     local nearestThreat = nil
                     local nearestDist   = 20
@@ -2093,17 +2234,123 @@ local function main()
                         )
                     end
 
-                -- NEW: say mode — form text shape (letter positions)
+                -- FIXED say: pixel font, visible to all players via BP
                 elseif mode2=="say" then
-                    local text = petSayText or "HI"
-                    local textLen = #text
-                    local charIdx = math.floor((i-1) / math.max(1, math.ceil(n/textLen))) + 1
-                    charIdx = math.min(charIdx, textLen)
-                    local charOff = (charIdx - (textLen+1)/2) * (petOrbitDist * 0.4)
-                    local posInChar = ((i-1) % math.max(1, math.ceil(n/textLen))) + 1
-                    local totalInChar = math.ceil(n/textLen)
-                    local col2 = (posInChar-1) % 3; local row2 = math.floor((posInChar-1)/3)
-                    tgt = targetPos + Vector3.new(charOff + (col2-1)*1.5, 3 + (2-row2)*1.5, -1.5)
+                    local sayPos=buildSayPositions(petSayText or "HI")
+                    local nPos=math.max(1,#sayPos)
+                    local sp=sayPos[((i-1)%nPos)+1]
+                    tgt=targetPos+Vector3.new(sp.X*1.4, sp.Y+2, sp.Z-2)
+
+
+                -- TRAIL
+                elseif mode2=="trail" then
+                    local idx2=math.clamp(i*3,1,math.max(1,#petTrailHistory))
+                    tgt=(petTrailHistory[idx2] or targetPos)+Vector3.new(0,1,0)
+
+                -- WINGS
+                elseif mode2=="petwings" then
+                    local half2=math.ceil(n/2); local side2=(i<=half2) and 1 or -1
+                    local wi2=(i<=half2) and i or (i-half2)
+                    local flap2=math.sin(orbitT*3)*(math.pi/5)
+                    local spanR=wi2/math.max(half2,1)*petOrbitDist
+                    local wAng2=flap2+side2*(math.pi/6)
+                    tgt=targetPos+Vector3.new(side2*(spanR*math.cos(wAng2)),spanR*math.sin(math.abs(wAng2))*0.4+2,-wi2*0.8)
+
+                -- THRONE
+                elseif mode2=="throne" then
+                    if not petThronePos then petThronePos=targetPos end
+                    local base2=petThronePos
+                    local seatN=math.floor(n*0.3); local backN=math.floor(n*0.6)
+                    if i<=seatN then
+                        local col2=(i-1)%4-1; local row2=math.floor((i-1)/4)
+                        tgt=base2+Vector3.new(col2*1.5,1,row2*1.5)
+                    elseif i<=backN then
+                        local bi=i-seatN; local col2=(bi-1)%4-1; local row2=math.floor((bi-1)/4)+2
+                        tgt=base2+Vector3.new(col2*1.5,row2*1.5,-2)
+                    else
+                        local ai=i-backN; local side2=(ai%2==0) and 3 or -3; local row2=math.floor((ai-1)/2)
+                        tgt=base2+Vector3.new(side2,row2*1.5+1,0)
+                    end
+
+                -- JUDGEMENT SWORD
+                elseif mode2=="judgement_sword" then
+                    local bladeN=math.floor(n*0.6); local guardN=math.max(1,math.floor(n*0.15))
+                    local slashAng=petSwordTimer*4
+                    local swordCF=CFrame.fromAxisAngle(Vector3.new(0,1,0),slashAng)
+                    if i<=bladeN then
+                        local t3=(i-1)/math.max(bladeN-1,1)
+                        tgt=targetPos+swordCF:VectorToWorldSpace(Vector3.new(0,t3*8+1,0))+Vector3.new(0,2,0)
+                    elseif i<=bladeN+guardN then
+                        local gi=i-bladeN; local gOff=(gi/(guardN+1)-0.5)*4
+                        tgt=targetPos+swordCF:VectorToWorldSpace(Vector3.new(gOff,1,0))+Vector3.new(0,2,0)
+                    else
+                        local hi=i-bladeN-guardN
+                        tgt=targetPos+swordCF:VectorToWorldSpace(Vector3.new(0,-hi*1.2,0))+Vector3.new(0,2,0)
+                    end
+
+                -- RAIN
+                elseif mode2=="rain" then
+                    local cloudN=math.max(1,math.floor(n*0.35))
+                    if i<=cloudN then
+                        local a2=(i-1)*(math.pi*2/cloudN); local r2=3+math.cos(a2*3)*1.5
+                        tgt=targetPos+Vector3.new(math.cos(a2)*r2,10+math.sin(a2*2)*0.8,math.sin(a2)*r2)
+                    else
+                        local ri=i-cloudN
+                        local xOff=((ri*3.7)%8)-4; local zOff=((ri*5.1)%8)-4
+                        local phase=(orbitT+ri*0.4)%3
+                        local yOff2=(phase<2) and (9-phase*5.5) or (-2+(phase-2)*11)
+                        tgt=targetPos+Vector3.new(xOff,yOff2,zOff)
+                    end
+
+                -- HOLLOW PURPLE
+                elseif mode2=="hollow_purple" then
+                    local half2=math.max(1,math.ceil(n/2)); local isBlue2=(i<=half2)
+                    local i2=isBlue2 and i or (i-half2)
+                    local progress=math.min(1,petSwordTimer/1.5); local side2=isBlue2 and -1 or 1
+                    local phi2=(1+math.sqrt(5))/2
+                    local theta2=math.acos(math.clamp(1-2*(i2+0.5)/half2,-1,1))
+                    local ang2=2*math.pi*i2/phi2; local r2=(1-progress)*8+1
+                    tgt=targetPos+Vector3.new(
+                        side2*8*(1-progress)+r2*math.sin(theta2)*math.cos(ang2+orbitT*2),
+                        r2*math.sin(theta2)*math.sin(ang2+orbitT*2)+1,
+                        r2*math.cos(theta2)*0.3-progress*20)
+
+                -- SLAP
+                elseif mode2=="slap" then
+                    local targ2=petSlapTarget and findPlayer(petSlapTarget)
+                    local tHRP2=targ2 and targ2.Character and
+                        (targ2.Character:FindFirstChild("HumanoidRootPart") or targ2.Character:FindFirstChild("Torso"))
+                    local slapCenter=tHRP2 and (tHRP2.Position+Vector3.new(0,0,-4)) or (targetPos+Vector3.new(0,0,-5))
+                    local palmN=math.max(1,math.floor(n*0.6))
+                    local slapSwing=math.sin(math.min(math.pi,petSlapTimer*4))*6
+                    if i<=palmN then
+                        local col2=(i-1)%5-2; local row2=math.floor((i-1)/5)
+                        tgt=slapCenter+Vector3.new(col2*1.5,row2*1.5+slapSwing,-row2*0.4)
+                    else
+                        local fi2=i-palmN; local finger=(fi2-1)%4-1; local seg=math.floor((fi2-1)/4)
+                        tgt=slapCenter+Vector3.new(finger*1.8,palmN/5*1.5+seg*1.4+slapSwing,-seg*0.4)
+                    end
+
+                -- TITANIC
+                elseif mode2=="titanic" then
+                    local tPos2=getTitanicPositions(); local tLen=#tPos2
+                    if tLen>0 then
+                        local offset=tPos2[((i-1)%tLen)+1]
+                        tgt=titanicPos+CFrame.fromAxisAngle(Vector3.new(0,1,0),titanicHeading):VectorToWorldSpace(offset)
+                    else tgt=targetPos end
+
+                -- TORNADO
+                elseif mode2=="tornado" then
+                    local t3=(i-1)/math.max(n-1,1); local torR=t3*6+0.5
+                    local torAng=orbitT*5+(i-1)*(math.pi*2/math.max(n,1))+t3*math.pi*2
+                    tgt=targetPos+Vector3.new(math.cos(torAng)*torR,20*(1-t3),math.sin(torAng)*torR)
+
+                -- BLACKHOLE
+                elseif mode2=="blackhole" then
+                    local ring=math.floor((i-1)/8); local seg2=(i-1)%8
+                    local bhR=(ring+1)*1.8
+                    local bhAng=orbitT*(3-ring*0.5)+seg2*(math.pi*2/8)+ring*(math.pi/4)
+                    tgt=targetPos+Vector3.new(math.cos(bhAng)*bhR,math.sin(bhAng)*bhR*0.3+2,math.sin(bhAng)*bhR)
 
                 else -- default hover above
                     tgt=targetPos+Vector3.new(0,4,0)
@@ -2130,31 +2377,82 @@ local function main()
             end
         end
 
+        -- Trail history update
+        table.insert(petTrailHistory,1,rootPos)
+        if #petTrailHistory>300 then table.remove(petTrailHistory) end
+        petSwordTimer=petSwordTimer+dt
+        petSlapTimer=petSlapTimer+dt
+
+        -- Titanic steering
+        if petState=="titanic" and not titanicAnchored then
+            local fwdDir=CFrame.fromAxisAngle(Vector3.new(0,1,0),titanicHeading)
+            titanicPos=titanicPos+fwdDir:VectorToWorldSpace(Vector3.new(0,0,-titanicSpeed*dt))
+        end
+
+        -- Tornado/blackhole: suck nearby unanchored parts
+        if petState=="tornado" or petState=="blackhole" then
+            for _,obj in ipairs(workspace:GetDescendants()) do
+                if obj:IsA("BasePart") and not obj.Anchored and not controlled[obj] and obj.Parent then
+                    local isChar2=false; local pp2=obj.Parent
+                    while pp2 and pp2~=workspace do
+                        if pp2:FindFirstChildOfClass("Humanoid") then isChar2=true; break end
+                        pp2=pp2.Parent
+                    end
+                    if not isChar2 then
+                        pcall(function() obj:SetNetworkOwner(player) end)
+                        local pullStr=(petState=="blackhole") and 110 or 55
+                        local bv2=obj:FindFirstChildOfClass("BodyVelocity")
+                        if not bv2 then
+                            bv2=Instance.new("BodyVelocity")
+                            bv2.MaxForce=Vector3.new(1e7,1e7,1e7); bv2.Parent=obj
+                        end
+                        bv2.Velocity=(rootPos-obj.Position).Unit*pullStr
+                    end
+                end
+            end
+        end
+
+        -- Hollow purple: auto-reset after 2s
+        if petState=="hollow_purple" and petSwordTimer>2 then petState="follow"; petSwordTimer=0 end
+
+        -- Slap: peak fling at ~0.8s, reset at 1.5s
+        if petState=="slap" then
+            if petSlapTimer>0.78 and petSlapTimer<0.84 then
+                local targ2=petSlapTarget and findPlayer(petSlapTarget)
+                local tHRP2=targ2 and targ2.Character and
+                    (targ2.Character:FindFirstChild("HumanoidRootPart") or targ2.Character:FindFirstChild("Torso"))
+                if tHRP2 then pcall(function()
+                    local bv3=Instance.new("BodyVelocity")
+                    bv3.MaxForce=Vector3.new(1e9,1e9,1e9); bv3.Velocity=Vector3.new(0,80,80)
+                    bv3.Parent=tHRP2; Debris:AddItem(bv3,0.3)
+                end) end
+            end
+            if petSlapTimer>1.5 then petState="follow"; petSlapTimer=0; petSlapTarget=nil end
+        end
+
         if #petOwnerList==0 then
-            -- No owner, hover above local player
             local arr={}
             for part,_ in pairs(controlled) do if part and part.Parent then table.insert(arr,part) end end
-            moveParts(arr, rootPos, petOrbitDist, t, petState)
+            moveParts(arr,rootPos,petOrbitDist,t,petState)
             if petState=="guard" then doPetGuard(rootPos) end
             if petState=="attack" and not petAttackFired then doPetAttackFling() end
             if petState=="carpet" then applyCarpetBoost(player.Name) else removeCarpetBoost(player.Name) end
         elseif #petOwnerList==1 then
             local root2=getPlayerRoot(petOwnerList[1])
             local tpos=root2 and root2.Position or rootPos
-            local ownerState = petOwnerStates_global[petOwnerList[1]] or petState
+            local ownerState=petOwnerStates_global[petOwnerList[1]] or petState
             local arr=getParts(petOwnerList[1])
-            moveParts(arr, tpos, petOrbitDist, t, ownerState)
+            moveParts(arr,tpos,petOrbitDist,t,ownerState)
             if ownerState=="guard" then doPetGuard(tpos) end
             if ownerState=="attack" and not petAttackFired then doPetAttackFling() end
             if ownerState=="carpet" then applyCarpetBoost(petOwnerList[1]) else removeCarpetBoost(petOwnerList[1]) end
         else
-            -- Split between owners
             for _,ownerName in ipairs(petOwnerList) do
                 local root2=getPlayerRoot(ownerName)
                 local tpos=root2 and root2.Position or rootPos
-                local ownerState = petOwnerStates_global[ownerName] or petState
+                local ownerState=petOwnerStates_global[ownerName] or petState
                 local arr=getParts(ownerName)
-                moveParts(arr, tpos, petOrbitDist, t, ownerState)
+                moveParts(arr,tpos,petOrbitDist,t,ownerState)
                 if ownerState=="guard" then doPetGuard(tpos) end
                 if ownerState=="carpet" then applyCarpetBoost(ownerName) else removeCarpetBoost(ownerName) end
             end
@@ -2183,12 +2481,12 @@ local function main()
         end
         if #petOwnerList==0 then
             local l=Instance.new("TextLabel",listFrame); l.Text="No owners yet.  Use !pet <name>"
-            l.Size=UDim2.new(1,0,0,18); l.BackgroundTransparency=1; l.TextColor3=Color3.fromRGB(100,100,130)
+            l.Size=UDim2.new(1,0,0,18); l.BackgroundTransparency=1; l.TextColor3=Color3.fromRGB(80,150,200)
             l.TextSize=9; l.Font=Enum.Font.Gotham; l.TextXAlignment=Enum.TextXAlignment.Left
         else
             for idx,name in ipairs(petOwnerList) do
-                local l=Instance.new("TextLabel",listFrame); l.Text="• "..name
-                l.Size=UDim2.new(1,0,0,18); l.BackgroundTransparency=1; l.TextColor3=Color3.fromRGB(140,220,140)
+                local l=Instance.new("TextLabel",listFrame); l.Text="- "..name
+                l.Size=UDim2.new(1,0,0,18); l.BackgroundTransparency=1; l.TextColor3=Color3.fromRGB(100,220,255)
                 l.TextSize=9; l.Font=Enum.Font.GothamBold; l.TextXAlignment=Enum.TextXAlignment.Left
                 l.LayoutOrder=idx
             end
@@ -2202,66 +2500,115 @@ local function main()
         local pg=player:WaitForChild("PlayerGui")
         local sg=Instance.new("ScreenGui"); sg.Name="PetSubGUI"; sg.ResetOnSpawn=false; sg.DisplayOrder=1000; sg.ZIndexBehavior=Enum.ZIndexBehavior.Sibling; sg.Parent=pg; petSubGui=sg
 
-        local W=210; local panel=Instance.new("Frame"); panel.Size=UDim2.fromOffset(W,380); panel.Position=UDim2.new(0.5,15,0.5,-190); panel.BackgroundColor3=Color3.fromRGB(8,14,8); panel.BorderSizePixel=0; panel.Parent=sg; Instance.new("UICorner",panel).CornerRadius=UDim.new(0,8)
-        local stk=Instance.new("UIStroke",panel); stk.Color=Color3.fromRGB(60,180,60); stk.Thickness=1.5
-
+        -- Water theme panel
+        local W=230; local panel=Instance.new("Frame")
+        panel.Size=UDim2.fromOffset(W,420); panel.Position=UDim2.new(0.5,15,0.5,-210)
+        panel.BackgroundColor3=Color3.fromRGB(4,18,38); panel.BorderSizePixel=0; panel.Parent=sg
+        Instance.new("UICorner",panel).CornerRadius=UDim.new(0,10)
+        local stk=Instance.new("UIStroke",panel); stk.Color=Color3.fromRGB(0,140,200); stk.Thickness=1.8
+        -- Wave bar
+        local waveBar=Instance.new("Frame",panel)
+        waveBar.Size=UDim2.new(1,0,0,12); waveBar.Position=UDim2.new(0,0,1,-12)
+        waveBar.BackgroundColor3=Color3.fromRGB(0,80,160); waveBar.BorderSizePixel=0
+        waveBar.ClipsDescendants=true; waveBar.ZIndex=20
+        Instance.new("UICorner",waveBar).CornerRadius=UDim.new(0,10)
+        local waveGrad=Instance.new("UIGradient",waveBar)
+        waveGrad.Color=ColorSequence.new({
+            ColorSequenceKeypoint.new(0,Color3.fromRGB(0,60,140)),
+            ColorSequenceKeypoint.new(0.5,Color3.fromRGB(0,200,255)),
+            ColorSequenceKeypoint.new(1,Color3.fromRGB(0,60,140)),
+        })
+        task.spawn(function()
+            local wt=0; while sg.Parent do
+                wt=wt+0.04; waveGrad.Offset=Vector2.new(math.sin(wt)*0.5,0); task.wait(0.03)
+            end
+        end)
+        -- Bubbles
+        for bi=1,5 do
+            local bub=Instance.new("Frame",panel)
+            bub.Size=UDim2.fromOffset(4,4); bub.BackgroundColor3=Color3.fromRGB(100,210,255)
+            bub.BackgroundTransparency=0.4; bub.BorderSizePixel=0; bub.ZIndex=3
+            Instance.new("UICorner",bub).CornerRadius=UDim.new(1,0)
+            local bx=math.floor((bi/6)*W); local startY=200+bi*30
+            bub.Position=UDim2.fromOffset(bx,startY)
+            task.spawn(function()
+                local by=startY; while sg.Parent do
+                    while by>30 and sg.Parent do by=by-2; bub.Position=UDim2.fromOffset(bx,by); task.wait(0.05) end
+                    bub.BackgroundTransparency=1; task.wait(0.6); by=360+bi*10; bub.BackgroundTransparency=0.4
+                end
+            end)
+        end
         -- Title bar
-        local titleBar=Instance.new("Frame"); titleBar.Size=UDim2.new(1,0,0,28); titleBar.BackgroundColor3=Color3.fromRGB(16,30,16); titleBar.BorderSizePixel=0; titleBar.ZIndex=10; titleBar.Parent=panel; Instance.new("UICorner",titleBar).CornerRadius=UDim.new(0,8)
-        local tLbl=Instance.new("TextLabel",titleBar); tLbl.Text="🐾 PET MODE"; tLbl.Size=UDim2.new(1,-40,1,0); tLbl.Position=UDim2.fromOffset(8,0); tLbl.BackgroundTransparency=1; tLbl.TextColor3=Color3.fromRGB(100,240,100); tLbl.TextSize=12; tLbl.Font=Enum.Font.GothamBold; tLbl.TextXAlignment=Enum.TextXAlignment.Left; tLbl.ZIndex=10
-        local closeX=Instance.new("TextButton",titleBar); closeX.Text="✕"; closeX.Size=UDim2.fromOffset(24,22); closeX.Position=UDim2.new(1,-28,0,3); closeX.BackgroundColor3=Color3.fromRGB(120,20,20); closeX.TextColor3=Color3.fromRGB(255,255,255); closeX.TextSize=10; closeX.Font=Enum.Font.GothamBold; closeX.BorderSizePixel=0; closeX.ZIndex=11; Instance.new("UICorner",closeX)
+        local titleBar=Instance.new("Frame")
+        titleBar.Size=UDim2.new(1,0,0,30); titleBar.BackgroundColor3=Color3.fromRGB(2,10,28)
+        titleBar.BorderSizePixel=0; titleBar.ZIndex=10; titleBar.Parent=panel
+        Instance.new("UICorner",titleBar).CornerRadius=UDim.new(0,10)
+        local titleGrad=Instance.new("UIGradient",titleBar)
+        titleGrad.Color=ColorSequence.new({
+            ColorSequenceKeypoint.new(0,Color3.fromRGB(0,30,80)),
+            ColorSequenceKeypoint.new(0.5,Color3.fromRGB(0,80,160)),
+            ColorSequenceKeypoint.new(1,Color3.fromRGB(0,30,80)),
+        })
+        task.spawn(function()
+            local tt=0; while sg.Parent do tt=tt+0.02; titleGrad.Rotation=math.floor(math.sin(tt)*8); task.wait(0.04) end
+        end)
+        local tLbl=Instance.new("TextLabel",titleBar)
+        tLbl.Text="PET MODE"; tLbl.Size=UDim2.new(1,-40,1,0); tLbl.Position=UDim2.fromOffset(10,0)
+        tLbl.BackgroundTransparency=1; tLbl.TextColor3=Color3.fromRGB(100,220,255)
+        tLbl.TextSize=13; tLbl.Font=Enum.Font.GothamBold; tLbl.TextXAlignment=Enum.TextXAlignment.Left; tLbl.ZIndex=10
+        Instance.new("UIStroke",tLbl).Color=Color3.fromRGB(0,100,180)
+        local closeX=Instance.new("TextButton",titleBar)
+        closeX.Text="X"; closeX.Size=UDim2.fromOffset(26,24); closeX.Position=UDim2.new(1,-30,0,3)
+        closeX.BackgroundColor3=Color3.fromRGB(80,0,30); closeX.TextColor3=Color3.fromRGB(255,180,180)
+        closeX.TextSize=11; closeX.Font=Enum.Font.GothamBold; closeX.BorderSizePixel=0; closeX.ZIndex=11
+        Instance.new("UICorner",closeX).CornerRadius=UDim.new(0,4)
         closeX.MouseButton1Click:Connect(function() destroyPet(); destroyPetGui(); activeMode="none"; isActivated=false end)
 
         local yOff=32
 
         -- Current state label
-        local stateLbl=Instance.new("TextLabel",panel); stateLbl.Text="STATE: IDLE"; stateLbl.Size=UDim2.new(1,-10,0,14); stateLbl.Position=UDim2.fromOffset(6,yOff); stateLbl.BackgroundTransparency=1; stateLbl.TextColor3=Color3.fromRGB(100,200,100); stateLbl.TextSize=9; stateLbl.Font=Enum.Font.GothamBold; stateLbl.TextXAlignment=Enum.TextXAlignment.Left
+        local stateLbl=Instance.new("TextLabel",panel); stateLbl.Text="STATE: IDLE"; stateLbl.Size=UDim2.new(1,-10,0,14); stateLbl.Position=UDim2.fromOffset(6,yOff); stateLbl.BackgroundTransparency=1; stateLbl.TextColor3=Color3.fromRGB(100,220,255); stateLbl.TextSize=9; stateLbl.Font=Enum.Font.GothamBold; stateLbl.TextXAlignment=Enum.TextXAlignment.Left
         yOff=yOff+16
         task.spawn(function()
             while sg.Parent and petActive do stateLbl.Text="STATE: "..petState:upper().."  |  OWNERS: "..#petOwnerList; task.wait(0.3) end
         end)
 
         -- Commands reference
-        local cmdBox=Instance.new("Frame",panel); cmdBox.Size=UDim2.new(1,-12,0,148); cmdBox.Position=UDim2.fromOffset(6,yOff); cmdBox.BackgroundColor3=Color3.fromRGB(5,10,5); cmdBox.BorderSizePixel=0; Instance.new("UICorner",cmdBox).CornerRadius=UDim.new(0,5); Instance.new("UIStroke",cmdBox).Color=Color3.fromRGB(40,100,40)
-        local cmdScroll=Instance.new("ScrollingFrame",cmdBox); cmdScroll.Size=UDim2.new(1,0,1,0); cmdScroll.BackgroundTransparency=1; cmdScroll.BorderSizePixel=0; cmdScroll.ScrollBarThickness=2; cmdScroll.ScrollBarImageColor3=Color3.fromRGB(60,180,60); cmdScroll.CanvasSize=UDim2.fromOffset(0,0); cmdScroll.AutomaticCanvasSize=Enum.AutomaticSize.Y
+        local cmdBox=Instance.new("Frame",panel); cmdBox.Size=UDim2.new(1,-12,0,148); cmdBox.Position=UDim2.fromOffset(6,yOff); cmdBox.BackgroundColor3=Color3.fromRGB(2,12,30); cmdBox.BorderSizePixel=0; Instance.new("UICorner",cmdBox).CornerRadius=UDim.new(0,5); Instance.new("UIStroke",cmdBox).Color=Color3.fromRGB(0,100,180)
+        local cmdScroll=Instance.new("ScrollingFrame",cmdBox); cmdScroll.Size=UDim2.new(1,0,1,0); cmdScroll.BackgroundTransparency=1; cmdScroll.BorderSizePixel=0; cmdScroll.ScrollBarThickness=2; cmdScroll.ScrollBarImageColor3=Color3.fromRGB(0,160,220); cmdScroll.CanvasSize=UDim2.fromOffset(0,0); cmdScroll.AutomaticCanvasSize=Enum.AutomaticSize.Y
         local cmdLay=Instance.new("UIListLayout",cmdScroll); cmdLay.Padding=UDim.new(0,1); Instance.new("UIPadding",cmdScroll).PaddingLeft=UDim.new(0,4)
         local cmds={
-            "!pet <name> — give pet to player",
-            "!unpet <name> — remove player's pet",
-            "!follow — follow owner",
-            "!stay — stay in place",
-            "!dance — random dance",
-            "!orbit — orbit owner",
-            "!orbit <dist> — orbit at distance",
-            "!wall — wall in front",
-            "!split — split between owners",
-            "!ring — ring around owner",
-            "!stop — freeze completely",
-            "!carpet — carpet under feet",
-            "!uncarpet — remove carpet",
-            "!attack <name> — fling player",
-            "!heart — heart shape",
-            "!sphere — sphere shape",
-            "!guard — guard owner (fling nearby)",
-            "!spin <speed> — set spin speed",
-            "!say <text> — form text",
-            "!gotto <name> — carry owner to target",
-            "!bring <name> — bring target to owner",
+            "!pet <name>","!unpet <name>",
+            "!follow","!stay","!dance",
+            "!orbit","!orbit <dist>",
+            "!wall","!split","!ring","!stop",
+            "!carpet / !uncarpet",
+            "!attack <name>","!heart","!sphere",
+            "!guard","!spin <speed>","!say <text>",
+            "!gotto <name>","!bring <name>",
+            "!hollow purple","!trail",
+            "!slap <name>","!throne",
+            "!sword","!rain","!wings",
+            "!tornado","!blackhole","!titanic",
+            "  ?forward / ?stop",
+            "  ?right / ?left",
+            "  ?anchor / ?unanchor / ?sink",
         }
         for _,cmd in ipairs(cmds) do
             local l=Instance.new("TextLabel",cmdScroll); l.Text=cmd; l.Size=UDim2.new(1,0,0,14); l.BackgroundTransparency=1
-            l.TextColor3=Color3.fromRGB(100,180,100); l.TextSize=8; l.Font=Enum.Font.Gotham; l.TextXAlignment=Enum.TextXAlignment.Left
+            l.TextColor3=Color3.fromRGB(120,210,255); l.TextSize=8; l.Font=Enum.Font.Gotham; l.TextXAlignment=Enum.TextXAlignment.Left
         end
         yOff=yOff+152
 
         -- Active owners list
-        local ownerHeader=Instance.new("TextLabel",panel); ownerHeader.Text="OWNERS"; ownerHeader.Size=UDim2.new(1,-10,0,14); ownerHeader.Position=UDim2.fromOffset(6,yOff); ownerHeader.BackgroundTransparency=1; ownerHeader.TextColor3=Color3.fromRGB(80,200,80); ownerHeader.TextSize=9; ownerHeader.Font=Enum.Font.GothamBold; ownerHeader.TextXAlignment=Enum.TextXAlignment.Left
+        local ownerHeader=Instance.new("TextLabel",panel); ownerHeader.Text="OWNERS"; ownerHeader.Size=UDim2.new(1,-10,0,14); ownerHeader.Position=UDim2.fromOffset(6,yOff); ownerHeader.BackgroundTransparency=1; ownerHeader.TextColor3=Color3.fromRGB(0,180,240); ownerHeader.TextSize=9; ownerHeader.Font=Enum.Font.GothamBold; ownerHeader.TextXAlignment=Enum.TextXAlignment.Left
         yOff=yOff+16
-        local listFrame=Instance.new("ScrollingFrame",panel); listFrame.Size=UDim2.new(1,-12,0,70); listFrame.Position=UDim2.fromOffset(6,yOff); listFrame.BackgroundColor3=Color3.fromRGB(5,10,5); listFrame.BorderSizePixel=0; listFrame.ScrollBarThickness=2; listFrame.ScrollBarImageColor3=Color3.fromRGB(60,180,60); listFrame.CanvasSize=UDim2.fromOffset(0,0); listFrame.AutomaticCanvasSize=Enum.AutomaticSize.Y; Instance.new("UICorner",listFrame).CornerRadius=UDim.new(0,4); Instance.new("UIStroke",listFrame).Color=Color3.fromRGB(40,100,40)
+        local listFrame=Instance.new("ScrollingFrame",panel); listFrame.Size=UDim2.new(1,-12,0,70); listFrame.Position=UDim2.fromOffset(6,yOff); listFrame.BackgroundColor3=Color3.fromRGB(2,12,30); listFrame.BorderSizePixel=0; listFrame.ScrollBarThickness=2; listFrame.ScrollBarImageColor3=Color3.fromRGB(0,160,220); listFrame.CanvasSize=UDim2.fromOffset(0,0); listFrame.AutomaticCanvasSize=Enum.AutomaticSize.Y; Instance.new("UICorner",listFrame).CornerRadius=UDim.new(0,4); Instance.new("UIStroke",listFrame).Color=Color3.fromRGB(0,100,180)
         Instance.new("UIListLayout",listFrame).Padding=UDim.new(0,1); Instance.new("UIPadding",listFrame).PaddingLeft=UDim.new(0,4)
         yOff=yOff+74
 
         -- Remove owner button
-        local remBtn=Instance.new("TextButton",panel); remBtn.Text="REMOVE ALL OWNERS"; remBtn.Size=UDim2.new(1,-12,0,26); remBtn.Position=UDim2.fromOffset(6,yOff); remBtn.BackgroundColor3=Color3.fromRGB(50,12,12); remBtn.TextColor3=Color3.fromRGB(255,80,80); remBtn.TextSize=9; remBtn.Font=Enum.Font.GothamBold; remBtn.BorderSizePixel=0; Instance.new("UICorner",remBtn)
+        local remBtn=Instance.new("TextButton",panel); remBtn.Text="REMOVE ALL OWNERS"; remBtn.Size=UDim2.new(1,-12,0,26); remBtn.Position=UDim2.fromOffset(6,yOff); remBtn.BackgroundColor3=Color3.fromRGB(2,20,50); remBtn.TextColor3=Color3.fromRGB(255,100,130); remBtn.TextSize=9; remBtn.Font=Enum.Font.GothamBold; remBtn.BorderSizePixel=0; Instance.new("UICorner",remBtn)
         remBtn.MouseButton1Click:Connect(function()
             petOwners={}; petOwnerList={}; petSplitOwners={}
             petState="idle"; rebuildPetOwnerList(listFrame)
@@ -2305,7 +2652,7 @@ local function main()
 
             -- FIX #3: Script owner assignment/management commands (ALWAYS processed for isSelf)
             if isSelf then
-                -- !pet <name> — assign pet to player (partial match supported)
+                -- !pet <name> - assign pet to player (partial match supported)
                 local assignQuery = lower:match("^!pet%s+(.+)$")
                 if assignQuery then
                     local p2 = findPlayer(assignQuery)
@@ -2318,7 +2665,7 @@ local function main()
                     return
                 end
 
-                -- !unpet <name> — remove a player's pet
+                -- !unpet <name> - remove a player's pet
                 local unpetQuery = lower:match("^!unpet%s+(.+)$")
                 if unpetQuery then
                     local p2 = findPlayer(unpetQuery)
@@ -2333,7 +2680,7 @@ local function main()
                     return
                 end
 
-                -- !attack <name> — fling targeted player
+                -- !attack <name> - fling targeted player
                 local attackQuery = lower:match("^!attack%s+(.+)$")
                 if attackQuery then
                     local p2 = findPlayer(attackQuery)
@@ -2342,7 +2689,7 @@ local function main()
                     return
                 end
 
-                -- !bring <name> — swallow target and bring to owner
+                -- !bring <name> - swallow target and bring to owner
                 local bringQuery = lower:match("^!bring%s+(.+)$")
                 if bringQuery then
                     local p2 = findPlayer(bringQuery)
@@ -2352,7 +2699,7 @@ local function main()
                     return
                 end
 
-                -- !gotto <name> — swallow owner and carry to target
+                -- !gotto <name> - swallow owner and carry to target
                 local gottoQuery = lower:match("^!gotto%s+(.+)$")
                 if gottoQuery then
                     local p2 = findPlayer(gottoQuery)
@@ -2368,16 +2715,50 @@ local function main()
 
                 -- !say <text>
                 local sayText = lower:match("^!say%s+(.+)$")
-                if sayText then petSayText = sayText; petState = "say"; return end
+                if sayText then petSayText=sayText; petState="say"; return end
+
+                -- !slap <name>
+                local slapQ=lower:match("^!slap%s+(.+)$")
+                if slapQ then
+                    local sp2=findPlayer(slapQ)
+                    if sp2 then petSlapTarget=sp2.Name; petSlapTimer=0; petState="slap" end
+                    return
+                end
+                if lower=="!hollow purple" or lower=="!hollowpurple" then
+                    petState="hollow_purple"; petSwordTimer=0; return
+                end
+                if lower=="!trail" then petState="trail"; petTrailHistory={}; return end
+                if lower=="!throne" then petThronePos=nil; petState="throne"; return end
+                if lower=="!judgement sword" or lower=="!judgementsword" or lower=="!sword" then
+                    petState="judgement_sword"; petSwordTimer=0; return
+                end
+                if lower=="!rain"      then petState="rain"; return end
+                if lower=="!wings"     then petState="petwings"; return end
+                if lower=="!tornado"   then petSuckGen=petSuckGen+1; petState="tornado"; return end
+                if lower=="!blackhole" then petSuckGen=petSuckGen+1; petState="blackhole"; return end
+                if lower=="!titanic"   then
+                    local ch3=player.Character
+                    local hrp3=ch3 and (ch3:FindFirstChild("HumanoidRootPart") or ch3:FindFirstChild("Torso"))
+                    titanicPos=hrp3 and hrp3.Position or Vector3.new(0,0,0)
+                    titanicHeading=0; titanicSpeed=0; titanicAnchored=false; _titanicPositions=nil
+                    petState="titanic"; return
+                end
+                if lower=="?forward"  then titanicSpeed=math.min(titanicSpeed+10,40); return end
+                if lower=="?stop"     then titanicSpeed=0; return end
+                if lower=="?right"    then titanicHeading=titanicHeading-0.3; return end
+                if lower=="?left"     then titanicHeading=titanicHeading+0.3; return end
+                if lower=="?sink"     then petState="rain"; return end
+                if lower=="?anchor"   then titanicAnchored=true; titanicSpeed=0; return end
+                if lower=="?unanchor" then titanicAnchored=false; return end
             end
 
             -- Commands any owner OR script owner can run on their own pet
             if not (isSelf or isOwner) then return end
 
             -- Helper: set state for the relevant owner(s)
-            -- If script owner with no assigned owners → set global petState
-            -- If script owner WITH assigned owners → set state for all their owners
-            -- If a pet owner → set only their own state
+            -- If script owner with no assigned owners - set global petState
+            -- If script owner WITH assigned owners - set state for all their owners
+            -- If a pet owner - set only their own state
             local function setState(newState)
                 if isSelf and #petOwnerList == 0 then
                     petState = newState
@@ -2446,14 +2827,29 @@ local function main()
 
             elseif lower=="!unpet" then
                 if isOwner then
-                    petOwners[speakerName] = nil
-                    for idx,v in ipairs(petOwnerList) do
-                        if v == speakerName then table.remove(petOwnerList, idx); break end
+                    petOwners[speakerName]=nil
+                    for idx2,v2 in ipairs(petOwnerList) do
+                        if v2==speakerName then table.remove(petOwnerList,idx2); break end
                     end
-                    petOwnerStates_global[speakerName] = nil
-                    petSplitOwners[speakerName] = nil
+                    petOwnerStates_global[speakerName]=nil; petSplitOwners[speakerName]=nil
                     redistributeParts()
                 end
+            elseif lower=="!trail"       then setState("trail")
+            elseif lower=="!wings"       then setState("petwings")
+            elseif lower=="!throne"      then petThronePos=nil; setState("throne")
+            elseif lower=="!rain"        then setState("rain")
+            elseif lower=="!tornado"     then setState("tornado")
+            elseif lower=="!blackhole"   then setState("blackhole")
+            elseif lower=="!hollow purple" or lower=="!hollowpurple" then
+                petSwordTimer=0; setState("hollow_purple")
+            elseif lower=="!titanic" then
+                titanicPos=targetPos; titanicHeading=0; titanicSpeed=0
+                titanicAnchored=false; _titanicPositions=nil; setState("titanic")
+            elseif lower:match("^!slap%s+(.+)$") then
+                local sq2=lower:match("^!slap%s+(.+)$"); local sp3=findPlayer(sq2)
+                if sp3 then petSlapTarget=sp3.Name; petSlapTimer=0; setState("slap") end
+            elseif lower=="!sword" or lower=="!judgement sword" then
+                petSwordTimer=0; setState("judgement_sword")
             end
 
             rebuildPetOwnerList(listFrame)
@@ -2479,7 +2875,7 @@ local function main()
 
         local panel=Instance.new("Frame");panel.Size=UDim2.fromOffset(170,210);panel.Position=UDim2.new(1,-185,0.5,-105);panel.BackgroundColor3=Color3.fromRGB(5,5,18);panel.BorderSizePixel=0;panel.Parent=sg;Instance.new("UICorner",panel).CornerRadius=UDim.new(0,8);local stk=Instance.new("UIStroke",panel);stk.Color=Color3.fromRGB(80,80,180);stk.Thickness=1.5
         local titleBar=Instance.new("Frame");titleBar.Size=UDim2.new(1,0,0,28);titleBar.BackgroundColor3=Color3.fromRGB(15,15,40);titleBar.BorderSizePixel=0;titleBar.ZIndex=10;titleBar.Parent=panel;Instance.new("UICorner",titleBar).CornerRadius=UDim.new(0,8)
-        local tLbl=Instance.new("TextLabel",titleBar);tLbl.Text="👁 GOJO LIMITLESS";tLbl.Size=UDim2.new(1,-8,1,0);tLbl.Position=UDim2.fromOffset(8,0);tLbl.BackgroundTransparency=1;tLbl.TextColor3=Color3.fromRGB(180,180,255);tLbl.TextSize=11;tLbl.Font=Enum.Font.GothamBold;tLbl.TextXAlignment=Enum.TextXAlignment.Left;tLbl.ZIndex=10
+        local tLbl=Instance.new("TextLabel",titleBar);tLbl.Text="- GOJO LIMITLESS";tLbl.Size=UDim2.new(1,-8,1,0);tLbl.Position=UDim2.fromOffset(8,0);tLbl.BackgroundTransparency=1;tLbl.TextColor3=Color3.fromRGB(180,180,255);tLbl.TextSize=11;tLbl.Font=Enum.Font.GothamBold;tLbl.TextXAlignment=Enum.TextXAlignment.Left;tLbl.ZIndex=10
         local stateLbl=Instance.new("TextLabel",panel);stateLbl.Text="STATE: IDLE";stateLbl.Size=UDim2.new(1,-10,0,14);stateLbl.Position=UDim2.fromOffset(6,31);stateLbl.BackgroundTransparency=1;stateLbl.TextColor3=Color3.fromRGB(120,120,200);stateLbl.TextSize=9;stateLbl.Font=Enum.Font.GothamBold;stateLbl.TextXAlignment=Enum.TextXAlignment.Left
 
         task.spawn(function()
@@ -2491,11 +2887,11 @@ local function main()
 
         local function gBtn(t2,yp,bg,fg)local b=Instance.new("TextButton",panel);b.Text=t2;b.Size=UDim2.new(1,-12,0,32);b.Position=UDim2.fromOffset(6,yp);b.BackgroundColor3=bg;b.TextColor3=fg;b.TextSize=10;b.Font=Enum.Font.GothamBold;b.BorderSizePixel=0;Instance.new("UICorner",b);return b end
 
-        local detectBtn =gBtn("🔍 DETECT PARTS",   50,  Color3.fromRGB(20,40,20),   Color3.fromRGB(80,255,80))
-        local blueBtn   =gBtn("◈ MAX BLUE",         86,  Color3.fromRGB(5,15,55),    Color3.fromRGB(60,140,255))
-        local redBtn    =gBtn("◈ REVERSAL RED",     122, Color3.fromRGB(45,8,5),     Color3.fromRGB(255,70,40))
-        local purpleBtn =gBtn("◈ HOLLOW PURPLE",    158, Color3.fromRGB(30,5,45),    Color3.fromRGB(200,80,255))
-        local deBtn     =gBtn("◈ DE: INFINITY",     194, Color3.fromRGB(10,10,35),   Color3.fromRGB(200,200,255))
+        local detectBtn =gBtn("- DETECT PARTS",   50,  Color3.fromRGB(20,40,20),   Color3.fromRGB(80,255,80))
+        local blueBtn   =gBtn("- MAX BLUE",         86,  Color3.fromRGB(5,15,55),    Color3.fromRGB(60,140,255))
+        local redBtn    =gBtn("- REVERSAL RED",     122, Color3.fromRGB(45,8,5),     Color3.fromRGB(255,70,40))
+        local purpleBtn =gBtn("- HOLLOW PURPLE",    158, Color3.fromRGB(30,5,45),    Color3.fromRGB(200,80,255))
+        local deBtn     =gBtn("- DE: INFINITY",     194, Color3.fromRGB(10,10,35),   Color3.fromRGB(200,200,255))
 
         -- Resize panel to fit 5 buttons
         panel.Size = UDim2.fromOffset(170, 240)
@@ -2520,14 +2916,14 @@ local function main()
         blueBtn.MouseButton1Click:Connect(function()
             if gojoState == "blue_hold" then
                 safeResetGojo()  -- FIX #4: increments gojoGen, kills thread
-                blueBtn.Text = "◈ MAX BLUE"
+                blueBtn.Text = "- MAX BLUE"
             elseif gojoState == "idle" then
                 fireMaxBlue()
-                blueBtn.Text = "◈ MAX BLUE  [STOP]"
+                blueBtn.Text = "- MAX BLUE  [STOP]"
                 task.spawn(function()
                     -- Auto-revert button label after 12s
                     task.wait(12)
-                    if blueBtn.Parent then blueBtn.Text = "◈ MAX BLUE" end
+                    if blueBtn.Parent then blueBtn.Text = "- MAX BLUE" end
                 end)
             end
         end)
@@ -2565,12 +2961,12 @@ local function main()
         local deActive=false
         deBtn.MouseButton1Click:Connect(function()
             if not deActive and gojoState=="idle" then
-                deActive=true; deBtn.Text="◈ DEACTIVATE ∞"
+                deActive=true; deBtn.Text="- DEACTIVATE -"
                 local char=player.Character
                 local root=char and(char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso"))
                 activateDeInfinity(root and root.Position or Vector3.new(0,5,0))
             elseif deActive then
-                deActive=false; deBtn.Text="◈ DE: INFINITY"
+                deActive=false; deBtn.Text="- DE: INFINITY"
                 deactivateDeInfinity()
             end
         end)
@@ -2578,9 +2974,9 @@ local function main()
         makeDraggable(titleBar,panel,false)
     end
 
-    -- ════════════════════════════════════════════════════════════
+    -- ------------------------------------------------------------
     -- MAIN LOOP (Heartbeat = after physics, smooth 60fps, no lag)
-    -- ════════════════════════════════════════════════════════════
+    -- ------------------------------------------------------------
     local function mainLoop()
         RunService.Heartbeat:Connect(function(dt)
             if not scriptAlive then return end
@@ -2698,7 +3094,7 @@ local function main()
                         pcall(function()
                             if data.bp and data.bp.Parent then
                                 -- Update BP.Position every frame so the physics force is always
-                                -- pointing at the new target — this replicates via network ownership
+                                -- pointing at the new target - this replicates via network ownership
                                 data.bp.P        = 300000
                                 data.bp.D        = 8000
                                 data.bp.MaxForce = Vector3.new(1e9,1e9,1e9)
@@ -2725,9 +3121,9 @@ local function main()
         end
     end
 
-    -- ════════════════════════════════════════════════════════════
+    -- ------------------------------------------------------------
     -- MAIN GUI
-    -- ════════════════════════════════════════════════════════════
+    -- ------------------------------------------------------------
     local function createGUI()
         local pg=player:WaitForChild("PlayerGui")
         local old=pg:FindFirstChild("ManipGUI"); if old then old:Destroy()end
@@ -2736,7 +3132,7 @@ local function main()
         local panel=Instance.new("Frame");panel.Name="Panel";panel.Size=UDim2.fromOffset(W,H);panel.Position=UDim2.new(0.5,-W/2,0.5,-H/2);panel.BackgroundColor3=Color3.fromRGB(10,10,25);panel.BorderSizePixel=0;panel.ClipsDescendants=true;panel.Parent=gui;Instance.new("UICorner",panel).CornerRadius=UDim.new(0,8);local pS=Instance.new("UIStroke",panel);pS.Color=Color3.fromRGB(90,40,180);pS.Thickness=1.5
         local titleBar=Instance.new("Frame");titleBar.Size=UDim2.new(1,0,0,30);titleBar.BackgroundColor3=Color3.fromRGB(20,10,48);titleBar.BorderSizePixel=0;titleBar.ZIndex=10;titleBar.Parent=panel;Instance.new("UICorner",titleBar).CornerRadius=UDim.new(0,8)
         local tTxt=Instance.new("TextLabel",titleBar);tTxt.Text="MANIPULATOR KII";tTxt.Size=UDim2.new(1,-60,1,0);tTxt.Position=UDim2.fromOffset(8,0);tTxt.BackgroundTransparency=1;tTxt.TextColor3=Color3.fromRGB(195,140,255);tTxt.TextSize=11;tTxt.Font=Enum.Font.GothamBold;tTxt.TextXAlignment=Enum.TextXAlignment.Left;tTxt.ZIndex=10
-        local closeBtn=Instance.new("TextButton",titleBar);closeBtn.Text="✕";closeBtn.Size=UDim2.fromOffset(24,22);closeBtn.Position=UDim2.new(1,-28,0,4);closeBtn.BackgroundColor3=Color3.fromRGB(150,25,25);closeBtn.TextColor3=Color3.fromRGB(255,255,255);closeBtn.TextSize=10;closeBtn.Font=Enum.Font.GothamBold;closeBtn.BorderSizePixel=0;closeBtn.ZIndex=11;Instance.new("UICorner",closeBtn)
+        local closeBtn=Instance.new("TextButton",titleBar);closeBtn.Text="-";closeBtn.Size=UDim2.fromOffset(24,22);closeBtn.Position=UDim2.new(1,-28,0,4);closeBtn.BackgroundColor3=Color3.fromRGB(150,25,25);closeBtn.TextColor3=Color3.fromRGB(255,255,255);closeBtn.TextSize=10;closeBtn.Font=Enum.Font.GothamBold;closeBtn.BorderSizePixel=0;closeBtn.ZIndex=11;Instance.new("UICorner",closeBtn)
         makeDraggable(titleBar,panel,false); makeDraggable(panel,panel,true)
         local scroll=Instance.new("ScrollingFrame");scroll.Size=UDim2.new(1,0,1,-30);scroll.Position=UDim2.fromOffset(0,30);scroll.BackgroundTransparency=1;scroll.BorderSizePixel=0;scroll.ScrollBarThickness=3;scroll.ScrollBarImageColor3=Color3.fromRGB(90,40,180);scroll.CanvasSize=UDim2.fromOffset(0,0);scroll.AutomaticCanvasSize=Enum.AutomaticSize.Y;scroll.Parent=panel
         local lay=Instance.new("UIListLayout",scroll);lay.Padding=UDim.new(0,3);lay.HorizontalAlignment=Enum.HorizontalAlignment.Center;lay.SortOrder=Enum.SortOrder.LayoutOrder
@@ -2745,12 +3141,12 @@ local function main()
         local function sBtn3(t2,bg,fg,ord)local b=Instance.new("TextButton",scroll);b.Text=t2;b.Size=UDim2.new(1,0,0,28);b.BackgroundColor3=bg;b.TextColor3=fg;b.TextSize=9;b.Font=Enum.Font.GothamBold;b.BorderSizePixel=0;b.LayoutOrder=ord;Instance.new("UICorner",b);return b end
 
         -- Settings
-        sLbl2("⚙ SETTINGS",0)
+        sLbl2("- SETTINGS",0)
         local function makeSettingRow(labelTxt,defaultVal,accentCol,order,onApply)
             local row=Instance.new("Frame",scroll);row.Size=UDim2.new(1,0,0,38);row.BackgroundColor3=Color3.fromRGB(14,12,32);row.BorderSizePixel=0;row.LayoutOrder=order;Instance.new("UICorner",row).CornerRadius=UDim.new(0,6);local rowStk=Instance.new("UIStroke",row);rowStk.Color=Color3.fromRGB(50,35,90);rowStk.Thickness=1
             local lbl=Instance.new("TextLabel",row);lbl.Text=labelTxt;lbl.Size=UDim2.new(0.48,0,0,16);lbl.Position=UDim2.fromOffset(6,3);lbl.BackgroundTransparency=1;lbl.TextColor3=accentCol;lbl.TextSize=8;lbl.Font=Enum.Font.GothamBold;lbl.TextXAlignment=Enum.TextXAlignment.Left
             local tb=Instance.new("TextBox",row);tb.Text=tostring(defaultVal);tb.Size=UDim2.new(0.52,-36,0,22);tb.Position=UDim2.new(0.46,0,0,8);tb.BackgroundColor3=Color3.fromRGB(22,18,50);tb.TextColor3=Color3.fromRGB(255,255,255);tb.TextSize=10;tb.Font=Enum.Font.GothamBold;tb.ClearTextOnFocus=false;tb.BorderSizePixel=0;Instance.new("UICorner",tb).CornerRadius=UDim.new(0,4)
-            local applyBtn=Instance.new("TextButton",row);applyBtn.Text="✓";applyBtn.Size=UDim2.fromOffset(28,22);applyBtn.Position=UDim2.new(1,-32,0,8);applyBtn.BackgroundColor3=accentCol;applyBtn.TextColor3=Color3.fromRGB(0,0,0);applyBtn.TextSize=11;applyBtn.Font=Enum.Font.GothamBold;applyBtn.BorderSizePixel=0;Instance.new("UICorner",applyBtn).CornerRadius=UDim.new(0,4)
+            local applyBtn=Instance.new("TextButton",row);applyBtn.Text="-";applyBtn.Size=UDim2.fromOffset(28,22);applyBtn.Position=UDim2.new(1,-32,0,8);applyBtn.BackgroundColor3=accentCol;applyBtn.TextColor3=Color3.fromRGB(0,0,0);applyBtn.TextSize=11;applyBtn.Font=Enum.Font.GothamBold;applyBtn.BorderSizePixel=0;Instance.new("UICorner",applyBtn).CornerRadius=UDim.new(0,4)
             local function flash(ok)applyBtn.BackgroundColor3=ok and Color3.fromRGB(80,255,120) or Color3.fromRGB(255,80,80);task.wait(0.25);if applyBtn.Parent then applyBtn.BackgroundColor3=accentCol end end
             applyBtn.MouseButton1Click:Connect(function()local num=tonumber(tb.Text);if num then onApply(num);task.spawn(function()flash(true)end)else task.spawn(function()flash(false)end)end end)
             tb.FocusLost:Connect(function(enter)if enter then local num=tonumber(tb.Text);if num then onApply(num)end end end)
@@ -2819,7 +3215,7 @@ local function main()
         sLbl2("ACTIONS",11)
         -- Lock Blocks toggle
         local lockBtn=Instance.new("TextButton",scroll)
-        lockBtn.Text="🔒 LOCK BLOCKS: OFF"
+        lockBtn.Text="- LOCK BLOCKS: OFF"
         lockBtn.Size=UDim2.new(1,0,0,28)
         lockBtn.BackgroundColor3=Color3.fromRGB(30,30,50)
         lockBtn.TextColor3=Color3.fromRGB(140,140,200)
@@ -2829,13 +3225,13 @@ local function main()
         lockBtn.MouseButton1Click:Connect(function()
             lockedBlocks=not lockedBlocks
             if lockedBlocks then
-                lockBtn.Text="🔒 LOCK BLOCKS: ON"
+                lockBtn.Text="- LOCK BLOCKS: ON"
                 lockBtn.BackgroundColor3=Color3.fromRGB(15,55,15)
                 lockBtn.TextColor3=Color3.fromRGB(80,255,100)
                 -- Immediate full enforcement on all current parts
                 lockAllNow()
             else
-                lockBtn.Text="🔒 LOCK BLOCKS: OFF"
+                lockBtn.Text="- LOCK BLOCKS: OFF"
                 lockBtn.BackgroundColor3=Color3.fromRGB(30,30,50)
                 lockBtn.TextColor3=Color3.fromRGB(140,140,200)
                 -- Restore normal BP strength
