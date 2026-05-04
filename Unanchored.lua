@@ -1,5 +1,5 @@
 -- ============================================================
--- UNANCHORED MANIPULATOR KII v17 -- DELTA EXECUTOR
+-- UNANCHORED MANIPULATOR KII v16 -- DELTA EXECUTOR
 -- v13 FIXES:
 --   [1] Unanchored blocks move fast (BP P=800000, D=40000) with
 --       RunService.Heartbeat for smooth ~60fps, no lag.
@@ -66,7 +66,7 @@ local function makeDraggable(handle, panel, edgeOnly)
 end
 
 local function main()
-    print("[ManipKii v17] "..player.Name)
+    print("[ManipKii v16] "..player.Name)
 
     -- ── Core state ────────────────────────────────────────────
     local isActivated=false; local activeMode="none"; local lastMode="none"
@@ -85,7 +85,7 @@ local function main()
     end
 
     -- ── Snake / Gaster / Sphere / SphereBender state ──────────
-    local snakeT=0; local snakeHistory={}; local SNAKE_HIST_MAX=300; local SNAKE_GAP=2
+    local snakeT=0; local snakeHistory={}; local SNAKE_HIST_MAX=600; local SNAKE_GAP=8
     local gasterAnim="pointing"; local gasterT=0; local gasterSubGui=nil
     local sphereSubGui=nil; local sphereMode="orbit"
     local spherePos=Vector3.new(0,0,0); local sphereVel=Vector3.new(0,0,0); local sphereOrbitAngle=0
@@ -254,30 +254,6 @@ local function main()
     local petSpinSpeed     = 0
     local petSayText       = nil  -- nil = no text, string = show text
     local petSphereMode    = false
-    -- Titanic steering state
-    local titanicPos     = Vector3.new(0,0,0)
-    local titanicHeading = 0      -- radians
-    local titanicSpeed   = 0      -- studs/s
-    local titanicAnchored= false
-    local titanicActive  = false
-    -- Hollow purple pet animation gen
-    local petPurpleGen   = 0
-    -- Slap target
-    local petSlapTarget  = nil
-    local petSlapPhase   = 0      -- 0=idle,1=form,2=swing,3=done
-    local petSlapTimer   = 0
-    -- Throne fixed position
-    local petThronePos   = nil
-    -- Sword slash state
-    local petSwordPhase  = 0      -- 0=idle,1=slash,2=follow
-    local petSwordTimer  = 0
-    -- Rain cloud state
-    local petRainOffsets = {}     -- {part->yOffset, vel}
-    -- Trail (snake-like) per-pet history
-    local petTrailHistory= {}
-    local petTrailT      = 0
-    -- Tornado / blackhole suck gen
-    local petSuckGen     = 0
     local petOwnerStates_global = {}  -- populated inside createPetGui
 
     -- ── Partial name matcher (2+ chars, case insensitive) ──────
@@ -1504,40 +1480,7 @@ local function main()
     end
 
     local function detectAllPartsForGojo()
-        -- Grab EVERY unanchored BasePart in workspace regardless of distance or ownership.
-        -- SetNetworkOwner gives us physics authority so BP forces replicate to all clients.
-        for _,obj in ipairs(workspace:GetDescendants()) do
-            if obj:IsA("BasePart") and not obj.Anchored and not controlled[obj]
-               and obj.Parent and obj.Size.Magnitude >= 0.2 and obj.Transparency < 1 then
-                -- Skip humanoid parts
-                local isChar = false
-                local p2 = obj.Parent
-                while p2 and p2 ~= workspace do
-                    if p2:FindFirstChildOfClass("Humanoid") then isChar=true; break end
-                    p2 = p2.Parent
-                end
-                if not isChar then
-                    pcall(function() obj.CanCollide=false end)
-                    pcall(function() obj:SetNetworkOwner(player) end)
-                    pcall(function()
-                        obj.CustomPhysicalProperties=PhysicalProperties.new(0.01,0.3,0.5,1,1)
-                        obj.Massless=true
-                    end)
-                    local origCC=obj.CanCollide; local origAnch=obj.Anchored
-                    local origM=obj.Massless; local origPP=obj.CustomPhysicalProperties
-                    local bp=Instance.new("BodyPosition")
-                    bp.MaxForce=Vector3.new(1e9,1e9,1e9); bp.P=300000; bp.D=8000
-                    bp.Position=obj.Position; bp.Parent=obj
-                    local bg=Instance.new("BodyGyro")
-                    bg.MaxTorque=Vector3.new(1e9,1e9,1e9); bg.P=300000; bg.D=8000
-                    bg.CFrame=obj.CFrame; bg.Parent=obj
-                    controlled[obj]={origCC=origCC,origAnch=origAnch,bp=bp,bg=bg,
-                        origColor=obj.Color,origMaterial=obj.Material,
-                        origMassless=origM,origPhysProps=origPP}
-                    partCount=partCount+1
-                end
-            end
-        end
+        fullSweep()
     end
 
     local function updateGojo(dt, rootPos)
@@ -1835,13 +1778,8 @@ local function main()
         end
     end
 
-    -- ── Pet attack: blocks rush target every frame; BodyVelocity fling on touch ──
+    -- ── Pet attack: blocks rush at target, on touch set huge velocity on target ──
     local petAttackFired = false
-    local petAttackConns = {}
-    local function clearAttackConns()
-        for _,c in ipairs(petAttackConns) do pcall(function()c:Disconnect()end) end
-        petAttackConns={}
-    end
     local function doPetAttackFling()
         if petAttackFired then return end
         local targ = petAttackTarget and findPlayer(petAttackTarget)
@@ -1850,35 +1788,36 @@ local function main()
         if not targChar then return end
         local targHRP = targChar:FindFirstChild("HumanoidRootPart") or targChar:FindFirstChild("Torso")
         if not targHRP then return end
-        clearAttackConns()
+
+        -- Connect Touched on all controlled parts — when a block reaches target, fling them
         for part,_ in pairs(controlled) do
             if part and part.Parent then
                 local conn; conn = part.Touched:Connect(function(hit)
                     if petAttackFired then pcall(function()conn:Disconnect()end); return end
                     if not hit then return end
-                    if not hit:IsDescendantOf(targChar) then return end
+                    -- Check if hit is part of target
+                    local hitChar = hit.Parent
+                    if hitChar ~= targChar and not hit:IsDescendantOf(targChar) then return end
                     petAttackFired = true
-                    clearAttackConns()
-                    -- BodyVelocity fling — replicates in FE via physics
+                    pcall(function()conn:Disconnect()end)
+                    -- Direct velocity fling — works client-side
                     pcall(function()
-                        local bv=Instance.new("BodyVelocity")
-                        bv.MaxForce=Vector3.new(1e9,1e9,1e9)
-                        bv.Velocity=Vector3.new(
-                            (math.random(0,1)*2-1)*100,
-                            140,
-                            (math.random(0,1)*2-1)*100
+                        targHRP.AssemblyLinearVelocity = Vector3.new(
+                            math.random(-1,1)*80,
+                            120,
+                            math.random(-1,1)*80
                         )
-                        bv.Parent=targHRP
-                        Debris:AddItem(bv,0.25)
                     end)
+                    -- Also try BodyVelocity as backup
                     pcall(function()
-                        targHRP.AssemblyLinearVelocity=Vector3.new(
-                            (math.random(0,1)*2-1)*100, 140, (math.random(0,1)*2-1)*100
-                        )
+                        local bv = Instance.new("BodyVelocity")
+                        bv.MaxForce = Vector3.new(1e9,1e9,1e9)
+                        bv.Velocity = Vector3.new(math.random(-1,1)*80, 120, math.random(-1,1)*80)
+                        bv.Parent = targHRP
+                        game:GetService("Debris"):AddItem(bv, 0.3)
                     end)
                 end)
-                table.insert(petAttackConns, conn)
-                task.delay(10, function() pcall(function()conn:Disconnect()end) end)
+                task.delay(8, function() pcall(function()conn:Disconnect()end) end)
             end
         end
     end
@@ -1935,7 +1874,7 @@ local function main()
         end
     end
 
-    -- ── Pet gotto: cage owner in sphere, pull them via BodyPosition to target ──
+    -- ── Pet gotto: cage owner in sphere → carry to target → release ──
     local petGottoActive = false
     function petGotto(targetPlayer)
         if petGottoActive then return end
@@ -1949,32 +1888,31 @@ local function main()
         if not ownerChar then petGottoActive=false; return end
         local ownerHRP  = ownerChar:FindFirstChild("HumanoidRootPart") or ownerChar:FindFirstChild("Torso")
         if not ownerHRP then petGottoActive=false; return end
-        -- Phase 1: cage sphere around owner
+        -- Phase 1: shrink sphere tightly around owner (cage)
         petOrbitDist = 3; petState = "petsphere"
-        task.wait(1.0)
-        -- Phase 2: pull owner with BodyPosition toward target (FE — replicates)
+        task.wait(1.2)
+        -- Phase 2: carry owner (teleport in steps), sphere stays around them
         local targChar = targetPlayer.Character
         local targHRP  = targChar and (targChar:FindFirstChild("HumanoidRootPart") or targChar:FindFirstChild("Torso"))
         if targHRP then
-            local destPos = targHRP.Position + Vector3.new(0, 0, 3)
-            local bv = Instance.new("BodyPosition")
-            bv.MaxForce = Vector3.new(1e8, 1e8, 1e8)
-            bv.P = 80000; bv.D = 3000
-            bv.Position = destPos
-            bv.Parent = ownerHRP
-            for step = 1, 40 do
+            local startPos = ownerHRP.Position
+            local endPos   = targHRP.Position + Vector3.new(0, 0, 3)
+            for step = 1, 30 do
                 if not petGottoActive then break end
-                task.wait(0.05)
+                local alpha = step / 30
+                pcall(function()
+                    ownerHRP.CFrame = CFrame.new(startPos:Lerp(endPos, alpha))
+                end)
+                task.wait(0.04)
             end
-            pcall(function() bv:Destroy() end)
         end
-        -- Phase 3: scatter/spit
+        -- Phase 3: spit/scatter
         petOrbitDist = prevOrbitDst; petState = "dance"
-        task.wait(0.4)
+        task.wait(0.5)
         petState = prevState; petGottoActive = false
     end
 
-    -- ── Pet bring: cage target with blocks, pull them via BodyPosition (FE) ──
+    -- ── Pet bring: fly blocks to target, cage them, carry to owner ──
     local petBringActive = false
     function petBring(targetPlayer)
         if petBringActive then return end
@@ -1989,34 +1927,30 @@ local function main()
         local ownerP    = findPlayer(ownerName)
         local ownerChar = ownerP and ownerP.Character
         local ownerHRP  = ownerChar and (ownerChar:FindFirstChild("HumanoidRootPart") or ownerChar:FindFirstChild("Torso"))
-        -- Phase 1: form cage around target
+        -- Phase 1: temporarily change "targetPos" to target player — do this by
+        --          overriding petOwnerList temporarily so blocks orbit target
         local savedList = petOwnerList
-        petOwnerList = {targetPlayer.Name}
-        petOwnerStates_global[targetPlayer.Name] = "petsphere"
+        petOwnerList = {targetPlayer.Name}; petOwnerStates_global[targetPlayer.Name] = "petsphere"
         petOrbitDist = 3; petState = "petsphere"
-        task.wait(1.0)
-        -- Phase 2: pull target to owner via BodyPosition on their HRP (replicates in FE)
+        task.wait(1.2)  -- cage around target
+        -- Phase 2: carry target to owner in steps
         if ownerHRP then
-            local destPos = ownerHRP.Position + Vector3.new(3, 0, 0)
-            local bv = Instance.new("BodyPosition")
-            bv.MaxForce = Vector3.new(1e8, 1e8, 1e8)
-            bv.P = 80000; bv.D = 3000
-            bv.Position = destPos
-            bv.Parent = targHRP
-            -- Track target movement and drag our cage along
-            for step = 1, 40 do
+            local startPos = targHRP.Position
+            local endPos   = ownerHRP.Position + Vector3.new(2, 0, 2)
+            for step = 1, 30 do
                 if not petBringActive then break end
-                -- Update cage center to follow target each frame
-                petOwnerStates_global[targetPlayer.Name] = "petsphere"
-                task.wait(0.05)
+                local alpha = step / 30
+                pcall(function()
+                    targHRP.CFrame = CFrame.new(startPos:Lerp(endPos, alpha))
+                end)
+                task.wait(0.04)
             end
-            pcall(function() bv:Destroy() end)
         end
-        -- Phase 3: scatter
+        -- Phase 3: release / scatter
         petOwnerList = savedList
         petOwnerStates_global[targetPlayer.Name] = nil
         petOrbitDist = prevOrbitDst; petState = "dance"
-        task.wait(0.4)
+        task.wait(0.5)
         petState = prevState; petBringActive = false
     end
 
@@ -2036,7 +1970,6 @@ local function main()
         end
 
         local function moveParts(parts, targetPos, orbitDist, orbitT, mode2)
-            orbitT = orbitT * (1 + math.max(0, petSpinSpeed))
             local n=math.max(#parts,1)
             for i,part in ipairs(parts) do
                 local data=controlled[part]; if not(data and data.bp and data.bp.Parent) then return end
@@ -2160,200 +2093,17 @@ local function main()
                         )
                     end
 
-                -- FIXED say mode — proper pixel font (5x3 per char, server-visible)
+                -- NEW: say mode — form text shape (letter positions)
                 elseif mode2=="say" then
-                    local sayPos = buildSayPositions(petSayText or "HI")
-                    local nPos   = math.max(1,#sayPos)
-                    local idx2   = ((i-1) % nPos) + 1
-                    local sp     = sayPos[idx2]
-                    tgt = targetPos + Vector3.new(sp.X*1.4, sp.Y+2, sp.Z-2)
-
-
-                -- TRAIL mode: snake trail following owner
-                elseif mode2=="trail" then
-                    petTrailT = petTrailT + 0
-                    local trailGap = 3
-                    local idx2 = math.clamp(i*trailGap, 1, math.max(1,#petTrailHistory))
-                    local histPos = petTrailHistory[idx2] or targetPos
-                    tgt = histPos + Vector3.new(0, 1, 0)
-
-                -- WINGS mode (same as main wings but for pet)
-                elseif mode2=="petwings" then
-                    local half = math.ceil(n/2)
-                    local side = (i <= half) and 1 or -1
-                    local wi   = (i <= half) and i or (i-half)
-                    local t2   = orbitT
-                    local flap = math.sin(t2*3)*(math.pi/5)
-                    local spanR= wi/math.max(half,1)*petOrbitDist
-                    local wAng = flap + side*(math.pi/6)
-                    tgt = targetPos + Vector3.new(
-                        side*(spanR*math.cos(wAng)),
-                        spanR*math.sin(math.abs(wAng))*0.4 + 2,
-                        -wi*0.8
-                    )
-
-                -- THRONE mode: stays at fixed spot, forms throne shape
-                elseif mode2=="throne" then
-                    if not petThronePos then petThronePos = targetPos end
-                    local base = petThronePos
-                    -- Seat (i=1..floor(n*0.3)): flat grid
-                    local seatN = math.floor(n*0.3)
-                    -- Back (i=seatN+1..floor(n*0.6)): vertical wall behind seat
-                    local backN = math.floor(n*0.6)
-                    -- Armrests (rest): sides
-                    if i <= seatN then
-                        local col2 = (i-1)%4 - 1
-                        local row2 = math.floor((i-1)/4)
-                        tgt = base + Vector3.new(col2*1.5, 1, row2*1.5)
-                    elseif i <= backN then
-                        local bi = i - seatN
-                        local col2 = (bi-1)%4 - 1
-                        local row2 = math.floor((bi-1)/4)+2
-                        tgt = base + Vector3.new(col2*1.5, row2*1.5, -2)
-                    else
-                        local ai = i - backN
-                        local side = (ai%2==0) and 3 or -3
-                        local row2 = math.floor((ai-1)/2)
-                        tgt = base + Vector3.new(side, row2*1.5+1, 0)
-                    end
-
-                -- JUDGEMENT SWORD: slash animation then follow owner
-                elseif mode2=="judgement_sword" then
-                    -- Sword shape: handle, guard, blade
-                    local bladeN = math.floor(n*0.6)
-                    local guardN = math.floor(n*0.15)
-                    -- Slash phase: rotate sword around owner
-                    local slashAng = petSwordTimer * 4  -- radians, 4 rad/s
-                    local swordDir = CFrame.fromAxisAngle(Vector3.new(0,1,0), slashAng)
-                    if i <= bladeN then
-                        -- Blade: extends forward, tapers
-                        local t3 = (i-1)/math.max(bladeN-1,1)
-                        local bPos = Vector3.new(0, t3*8+1, 0)  -- vertical blade
-                        local bRot = swordDir:VectorToWorldSpace(bPos)
-                        tgt = targetPos + bRot + Vector3.new(0,2,0)
-                    elseif i <= bladeN+guardN then
-                        -- Guard: horizontal bar across blade
-                        local gi = i - bladeN
-                        local gOff = (gi/(guardN+1) - 0.5)*4
-                        local gPos = Vector3.new(gOff, 1, 0)
-                        tgt = targetPos + swordDir:VectorToWorldSpace(gPos) + Vector3.new(0,2,0)
-                    else
-                        -- Handle: below guard
-                        local hi = i - bladeN - guardN
-                        local hPos = Vector3.new(0, -hi*1.2, 0)
-                        tgt = targetPos + swordDir:VectorToWorldSpace(hPos) + Vector3.new(0,2,0)
-                    end
-
-                -- RAIN: cloud above + blocks fall then rise (looping)
-                elseif mode2=="rain" then
-                    local cloudN = math.floor(n*0.35)
-                    if i <= cloudN then
-                        -- Form cloud shape above owner
-                        local a2 = (i-1)*(math.pi*2/cloudN)
-                        local r2 = 3 + math.cos(a2*3)*1.5
-                        tgt = targetPos + Vector3.new(
-                            math.cos(a2)*r2,
-                            10 + math.sin(a2*2)*0.8,
-                            math.sin(a2)*r2
-                        )
-                    else
-                        -- Rain drop: falls from cloud, loops back up
-                        local ri = i - cloudN
-                        local rainSeed = ri * 7.3 + 1.1
-                        local xOff = ((ri*3.7)%8)-4
-                        local zOff = ((ri*5.1)%8)-4
-                        -- Phase based on time offset per drop
-                        local phase = (orbitT + ri*0.4) % 3  -- 0..3 cycle
-                        local yOff
-                        if phase < 2 then
-                            -- Falling: from y=9 to y=-2
-                            yOff = 9 - phase*(9+2)/2
-                        else
-                            -- Rising: from y=-2 back to y=9
-                            yOff = -2 + (phase-2)*(9+2)
-                        end
-                        tgt = targetPos + Vector3.new(xOff, yOff, zOff)
-                    end
-
-                -- HOLLOW PURPLE (pet): animation + fire effect
-                elseif mode2=="hollow_purple" then
-                    local half2 = math.ceil(n/2)
-                    local isBlue = (i <= half2)
-                    local i2 = isBlue and i or (i-half2)
-                    -- Blue half: pull inward from left
-                    -- Red half: push outward from right
-                    local progress = math.min(1, petSwordTimer/1.5)
-                    local side2 = isBlue and -1 or 1
-                    local spreadF = 1-progress  -- start spread, converge to center
-                    local aimFwd = Vector3.new(0,0,-1)  -- fire forward (-Z)
-                    local basePos = targetPos + aimFwd*(progress*30)
-                    local phi2=(1+math.sqrt(5))/2
-                    local theta2=math.acos(math.clamp(1-2*(i2+0.5)/math.max(half2,1),-1,1))
-                    local ang2=2*math.pi*i2/phi2
-                    local r2 = spreadF*8 + 1
-                    tgt = basePos + Vector3.new(
-                        side2*8*(1-progress) + r2*math.sin(theta2)*math.cos(ang2+orbitT*2),
-                        r2*math.sin(theta2)*math.sin(ang2+orbitT*2)+1,
-                        r2*math.cos(theta2)*0.3
-                    )
-
-                -- SLAP: blocks form giant hand, swing at target
-                elseif mode2=="slap" then
-                    local targ2 = petSlapTarget and findPlayer(petSlapTarget)
-                    local targHRP2 = targ2 and targ2.Character and (targ2.Character:FindFirstChild("HumanoidRootPart") or targ2.Character:FindFirstChild("Torso"))
-                    local slapCenter = targHRP2 and targHRP2.Position + Vector3.new(0,0,-5) or targetPos + Vector3.new(0,0,-5)
-                    -- Palm (60% of blocks): flat square
-                    local palmN = math.floor(n*0.6)
-                    -- Fingers (40%): 4 columns
-                    local slapPhaseAng = math.min(math.pi, petSlapTimer*4)  -- 0→pi = swing
-                    local slapSwing    = math.sin(slapPhaseAng)*6
-                    if i <= palmN then
-                        local col2=(i-1)%5-2; local row2=math.floor((i-1)/5)
-                        tgt = slapCenter + Vector3.new(col2*1.5, row2*1.5+slapSwing, -row2*0.5)
-                    else
-                        local fi2 = i-palmN
-                        local finger = (fi2-1)%4-1
-                        local seg    = math.floor((fi2-1)/4)
-                        tgt = slapCenter + Vector3.new(finger*1.8, palmN/5*1.5+seg*1.4+slapSwing, -seg*0.4)
-                    end
-
-                -- TITANIC: full model formation with steering
-                elseif mode2=="titanic" then
-                    local tPos = buildTitanicPositions()
-                    local tLen = #tPos
-                    if tLen > 0 then
-                        local offset = tPos[((i-1)%tLen)+1]
-                        -- Rotate offset by titanic heading
-                        local headCF = CFrame.fromAxisAngle(Vector3.new(0,1,0), titanicHeading)
-                        local rotOff = headCF:VectorToWorldSpace(offset)
-                        tgt = titanicPos + rotOff
-                    else
-                        tgt = targetPos
-                    end
-
-                -- TORNADO: spiral + suck in nearby unanchored parts
-                elseif mode2=="tornado" then
-                    local torHeight = 20
-                    local t3 = (i-1)/math.max(n-1,1)     -- 0=top, 1=bottom
-                    local torR = t3*6 + 0.5               -- widens toward bottom
-                    local torAng = orbitT*5 + i*(math.pi*2/math.max(n,1)) + t3*math.pi*2
-                    tgt = targetPos + Vector3.new(
-                        math.cos(torAng)*torR,
-                        torHeight*(1-t3),
-                        math.sin(torAng)*torR
-                    )
-
-                -- BLACKHOLE: rotating disk + pulls everything in
-                elseif mode2=="blackhole" then
-                    local ring = math.floor((i-1)/8)
-                    local seg2  = (i-1)%8
-                    local bhR  = (ring+1)*1.8
-                    local bhAng= orbitT*(3-ring*0.5) + seg2*(math.pi*2/8) + ring*(math.pi/4)
-                    tgt = targetPos + Vector3.new(
-                        math.cos(bhAng)*bhR,
-                        math.sin(bhAng)*bhR*0.3 + 2,
-                        math.sin(bhAng)*bhR
-                    )
+                    local text = petSayText or "HI"
+                    local textLen = #text
+                    local charIdx = math.floor((i-1) / math.max(1, math.ceil(n/textLen))) + 1
+                    charIdx = math.min(charIdx, textLen)
+                    local charOff = (charIdx - (textLen+1)/2) * (petOrbitDist * 0.4)
+                    local posInChar = ((i-1) % math.max(1, math.ceil(n/textLen))) + 1
+                    local totalInChar = math.ceil(n/textLen)
+                    local col2 = (posInChar-1) % 3; local row2 = math.floor((posInChar-1)/3)
+                    tgt = targetPos + Vector3.new(charOff + (col2-1)*1.5, 3 + (2-row2)*1.5, -1.5)
 
                 else -- default hover above
                     tgt=targetPos+Vector3.new(0,4,0)
@@ -2380,73 +2130,8 @@ local function main()
             end
         end
 
-        -- Update trail history
-        table.insert(petTrailHistory, 1, rootPos)
-        if #petTrailHistory > 300 then table.remove(petTrailHistory) end
-        petSwordTimer = petSwordTimer + dt
-        petSlapTimer  = petSlapTimer  + dt
-
-        -- Titanic steering per-frame
-        if petState=="titanic" or (petOwnerList[1] and (petOwnerStates_global[petOwnerList[1]]=="titanic")) then
-            if not titanicAnchored then
-                titanicPos = titanicPos + CFrame.fromAxisAngle(Vector3.new(0,1,0), titanicHeading):VectorToWorldSpace(
-                    Vector3.new(0,0,-titanicSpeed*dt)
-                )
-            end
-        end
-
-        -- Tornado/blackhole: suck in ALL nearby unanchored parts every 0.5s
-        if petState=="tornado" or petState=="blackhole" then
-            for _,obj in ipairs(workspace:GetDescendants()) do
-                if obj:IsA("BasePart") and not obj.Anchored and not controlled[obj] then
-                    local isCharPart=false
-                    local pp=obj.Parent
-                    while pp and pp~=workspace do
-                        if pp:FindFirstChildOfClass("Humanoid") then isCharPart=true;break end
-                        pp=pp.Parent
-                    end
-                    if not isCharPart then
-                        pcall(function()
-                            obj:SetNetworkOwner(player)
-                            obj.CustomPhysicalProperties=PhysicalProperties.new(0.01,0.3,0.5,1,1)
-                            obj.Massless=true
-                        end)
-                        local sucDir = (rootPos - obj.Position)
-                        local bv2 = obj:FindFirstChildOfClass("BodyVelocity")
-                        if not bv2 then
-                            bv2=Instance.new("BodyVelocity")
-                            bv2.MaxForce=Vector3.new(1e7,1e7,1e7)
-                            bv2.Parent=obj
-                        end
-                        local pullForce = petState=="blackhole" and 120 or 60
-                        bv2.Velocity = sucDir.Unit * pullForce
-                    end
-                end
-            end
-        end
-
-        -- Hollow purple pet: reset after 2s
-        if petState=="hollow_purple" and petSwordTimer > 2 then
-            petState="follow"; petSwordTimer=0
-        end
-        -- Slap: fling target when swing peaks (~0.8s)
-        if petState=="slap" and petSlapTimer > 0.8 and petSlapTimer < 0.85 then
-            local targ2=petSlapTarget and findPlayer(petSlapTarget)
-            local tHRP2=targ2 and targ2.Character and (targ2.Character:FindFirstChild("HumanoidRootPart") or targ2.Character:FindFirstChild("Torso"))
-            if tHRP2 then
-                pcall(function()
-                    local bv3=Instance.new("BodyVelocity")
-                    bv3.MaxForce=Vector3.new(1e9,1e9,1e9)
-                    bv3.Velocity=Vector3.new(0,80,80)
-                    bv3.Parent=tHRP2; Debris:AddItem(bv3,0.3)
-                end)
-            end
-        end
-        if petState=="slap" and petSlapTimer > 1.5 then
-            petState="follow"; petSlapTimer=0; petSlapTarget=nil
-        end
-
         if #petOwnerList==0 then
+            -- No owner, hover above local player
             local arr={}
             for part,_ in pairs(controlled) do if part and part.Parent then table.insert(arr,part) end end
             moveParts(arr, rootPos, petOrbitDist, t, petState)
@@ -2463,6 +2148,7 @@ local function main()
             if ownerState=="attack" and not petAttackFired then doPetAttackFling() end
             if ownerState=="carpet" then applyCarpetBoost(petOwnerList[1]) else removeCarpetBoost(petOwnerList[1]) end
         else
+            -- Split between owners
             for _,ownerName in ipairs(petOwnerList) do
                 local root2=getPlayerRoot(ownerName)
                 local tpos=root2 and root2.Position or rootPos
@@ -2497,12 +2183,12 @@ local function main()
         end
         if #petOwnerList==0 then
             local l=Instance.new("TextLabel",listFrame); l.Text="No owners yet.  Use !pet <name>"
-            l.Size=UDim2.new(1,0,0,18); l.BackgroundTransparency=1; l.TextColor3=Color3.fromRGB(80,150,200)
+            l.Size=UDim2.new(1,0,0,18); l.BackgroundTransparency=1; l.TextColor3=Color3.fromRGB(100,100,130)
             l.TextSize=9; l.Font=Enum.Font.Gotham; l.TextXAlignment=Enum.TextXAlignment.Left
         else
             for idx,name in ipairs(petOwnerList) do
-                local l=Instance.new("TextLabel",listFrame); l.Text="- "..name
-                l.Size=UDim2.new(1,0,0,18); l.BackgroundTransparency=1; l.TextColor3=Color3.fromRGB(100,220,255)
+                local l=Instance.new("TextLabel",listFrame); l.Text="• "..name
+                l.Size=UDim2.new(1,0,0,18); l.BackgroundTransparency=1; l.TextColor3=Color3.fromRGB(140,220,140)
                 l.TextSize=9; l.Font=Enum.Font.GothamBold; l.TextXAlignment=Enum.TextXAlignment.Left
                 l.LayoutOrder=idx
             end
@@ -2516,138 +2202,66 @@ local function main()
         local pg=player:WaitForChild("PlayerGui")
         local sg=Instance.new("ScreenGui"); sg.Name="PetSubGUI"; sg.ResetOnSpawn=false; sg.DisplayOrder=1000; sg.ZIndexBehavior=Enum.ZIndexBehavior.Sibling; sg.Parent=pg; petSubGui=sg
 
-        -- ── WATER THEME GUI ────────────────────────────────────────
-        local W=230
-        local panel=Instance.new("Frame")
-        panel.Size=UDim2.fromOffset(W,420); panel.Position=UDim2.new(0.5,15,0.5,-210)
-        panel.BackgroundColor3=Color3.fromRGB(4,18,38); panel.BorderSizePixel=0; panel.Parent=sg
-        Instance.new("UICorner",panel).CornerRadius=UDim.new(0,10)
-        local stk=Instance.new("UIStroke",panel); stk.Color=Color3.fromRGB(0,140,200); stk.Thickness=1.8
+        local W=210; local panel=Instance.new("Frame"); panel.Size=UDim2.fromOffset(W,380); panel.Position=UDim2.new(0.5,15,0.5,-190); panel.BackgroundColor3=Color3.fromRGB(8,14,8); panel.BorderSizePixel=0; panel.Parent=sg; Instance.new("UICorner",panel).CornerRadius=UDim.new(0,8)
+        local stk=Instance.new("UIStroke",panel); stk.Color=Color3.fromRGB(60,180,60); stk.Thickness=1.5
 
-        -- Animated water gradient at bottom of panel
-        local waveBar=Instance.new("Frame",panel)
-        waveBar.Size=UDim2.new(1,0,0,12); waveBar.Position=UDim2.new(0,0,1,-12)
-        waveBar.BackgroundColor3=Color3.fromRGB(0,80,160); waveBar.BorderSizePixel=0
-        waveBar.ClipsDescendants=true; waveBar.ZIndex=20
-        Instance.new("UICorner",waveBar).CornerRadius=UDim.new(0,10)
-        local waveGrad=Instance.new("UIGradient",waveBar)
-        waveGrad.Color=ColorSequence.new({
-            ColorSequenceKeypoint.new(0,Color3.fromRGB(0,60,140)),
-            ColorSequenceKeypoint.new(0.4,Color3.fromRGB(0,160,220)),
-            ColorSequenceKeypoint.new(0.7,Color3.fromRGB(0,200,255)),
-            ColorSequenceKeypoint.new(1,Color3.fromRGB(0,60,140)),
-        })
-        waveGrad.Rotation=0
-        task.spawn(function()
-            local wt=0
-            while sg.Parent do
-                wt=wt+0.04
-                waveGrad.Offset=Vector2.new(math.sin(wt)*0.5,0)
-                task.wait(0.03)
-            end
-        end)
-
-        -- Bubbles animation (rising dots)
-        for bi=1,6 do
-            local bub=Instance.new("Frame",panel)
-            bub.Size=UDim2.fromOffset(4,4); bub.BackgroundColor3=Color3.fromRGB(100,210,255)
-            bub.BackgroundTransparency=0.4; bub.BorderSizePixel=0; bub.ZIndex=3
-            Instance.new("UICorner",bub).CornerRadius=UDim.new(1,0)
-            local bx=(bi/(7))*W; local startY=math.random(200,380)
-            bub.Position=UDim2.fromOffset(bx, startY)
-            task.spawn(function()
-                while sg.Parent do
-                    local by=startY
-                    while by > 30 and sg.Parent do
-                        by=by-1.5; bub.Position=UDim2.fromOffset(bx,by)
-                        task.wait(0.04)
-                    end
-                    bub.BackgroundTransparency=1; task.wait(0.5)
-                    by=math.random(360,410); bub.BackgroundTransparency=0.4
-                    startY=by
-                end
-            end)
-        end
-
-        -- Title bar (deep ocean blue)
-        local titleBar=Instance.new("Frame"); titleBar.Size=UDim2.new(1,0,0,30)
-        titleBar.BackgroundColor3=Color3.fromRGB(2,10,28); titleBar.BorderSizePixel=0
-        titleBar.ZIndex=10; titleBar.Parent=panel
-        Instance.new("UICorner",titleBar).CornerRadius=UDim.new(0,10)
-        local titleGrad=Instance.new("UIGradient",titleBar)
-        titleGrad.Color=ColorSequence.new({
-            ColorSequenceKeypoint.new(0,Color3.fromRGB(0,30,80)),
-            ColorSequenceKeypoint.new(0.5,Color3.fromRGB(0,80,160)),
-            ColorSequenceKeypoint.new(1,Color3.fromRGB(0,30,80)),
-        })
-        titleGrad.Rotation=0
-        task.spawn(function()
-            local tt=0
-            while sg.Parent do tt=tt+0.02; titleGrad.Rotation=math.sin(tt)*8; task.wait(0.04) end
-        end)
-        local tLbl=Instance.new("TextLabel",titleBar); tLbl.Text="PET MODE"
-        tLbl.Size=UDim2.new(1,-40,1,0); tLbl.Position=UDim2.fromOffset(10,0)
-        tLbl.BackgroundTransparency=1; tLbl.TextColor3=Color3.fromRGB(100,220,255)
-        tLbl.TextSize=13; tLbl.Font=Enum.Font.GothamBold
-        tLbl.TextXAlignment=Enum.TextXAlignment.Left; tLbl.ZIndex=10
-        local tStroke=Instance.new("UIStroke",tLbl); tStroke.Color=Color3.fromRGB(0,100,180); tStroke.Thickness=1
-        local closeX=Instance.new("TextButton",titleBar); closeX.Text="X"
-        closeX.Size=UDim2.fromOffset(26,24); closeX.Position=UDim2.new(1,-30,0,3)
-        closeX.BackgroundColor3=Color3.fromRGB(80,0,30); closeX.TextColor3=Color3.fromRGB(255,180,180)
-        closeX.TextSize=10; closeX.Font=Enum.Font.GothamBold; closeX.BorderSizePixel=0; closeX.ZIndex=11
-        Instance.new("UICorner",closeX).CornerRadius=UDim.new(0,4)
+        -- Title bar
+        local titleBar=Instance.new("Frame"); titleBar.Size=UDim2.new(1,0,0,28); titleBar.BackgroundColor3=Color3.fromRGB(16,30,16); titleBar.BorderSizePixel=0; titleBar.ZIndex=10; titleBar.Parent=panel; Instance.new("UICorner",titleBar).CornerRadius=UDim.new(0,8)
+        local tLbl=Instance.new("TextLabel",titleBar); tLbl.Text="🐾 PET MODE"; tLbl.Size=UDim2.new(1,-40,1,0); tLbl.Position=UDim2.fromOffset(8,0); tLbl.BackgroundTransparency=1; tLbl.TextColor3=Color3.fromRGB(100,240,100); tLbl.TextSize=12; tLbl.Font=Enum.Font.GothamBold; tLbl.TextXAlignment=Enum.TextXAlignment.Left; tLbl.ZIndex=10
+        local closeX=Instance.new("TextButton",titleBar); closeX.Text="✕"; closeX.Size=UDim2.fromOffset(24,22); closeX.Position=UDim2.new(1,-28,0,3); closeX.BackgroundColor3=Color3.fromRGB(120,20,20); closeX.TextColor3=Color3.fromRGB(255,255,255); closeX.TextSize=10; closeX.Font=Enum.Font.GothamBold; closeX.BorderSizePixel=0; closeX.ZIndex=11; Instance.new("UICorner",closeX)
         closeX.MouseButton1Click:Connect(function() destroyPet(); destroyPetGui(); activeMode="none"; isActivated=false end)
 
         local yOff=32
 
         -- Current state label
-        local stateLbl=Instance.new("TextLabel",panel); stateLbl.Text="STATE: IDLE"; stateLbl.Size=UDim2.new(1,-10,0,14); stateLbl.Position=UDim2.fromOffset(6,yOff); stateLbl.BackgroundTransparency=1; stateLbl.TextColor3=Color3.fromRGB(100,220,255); stateLbl.TextSize=9; stateLbl.Font=Enum.Font.GothamBold; stateLbl.TextXAlignment=Enum.TextXAlignment.Left
+        local stateLbl=Instance.new("TextLabel",panel); stateLbl.Text="STATE: IDLE"; stateLbl.Size=UDim2.new(1,-10,0,14); stateLbl.Position=UDim2.fromOffset(6,yOff); stateLbl.BackgroundTransparency=1; stateLbl.TextColor3=Color3.fromRGB(100,200,100); stateLbl.TextSize=9; stateLbl.Font=Enum.Font.GothamBold; stateLbl.TextXAlignment=Enum.TextXAlignment.Left
         yOff=yOff+16
         task.spawn(function()
             while sg.Parent and petActive do stateLbl.Text="STATE: "..petState:upper().."  |  OWNERS: "..#petOwnerList; task.wait(0.3) end
         end)
 
         -- Commands reference
-        local cmdBox=Instance.new("Frame",panel); cmdBox.Size=UDim2.new(1,-12,0,160); cmdBox.Position=UDim2.fromOffset(6,yOff); cmdBox.BackgroundColor3=Color3.fromRGB(2,12,30); cmdBox.BorderSizePixel=0; Instance.new("UICorner",cmdBox).CornerRadius=UDim.new(0,5); Instance.new("UIStroke",cmdBox).Color=Color3.fromRGB(0,100,180)
-        local cmdScroll=Instance.new("ScrollingFrame",cmdBox); cmdScroll.Size=UDim2.new(1,0,1,0); cmdScroll.BackgroundTransparency=1; cmdScroll.BorderSizePixel=0; cmdScroll.ScrollBarThickness=2; cmdScroll.ScrollBarImageColor3=Color3.fromRGB(0,160,220); cmdScroll.CanvasSize=UDim2.fromOffset(0,0); cmdScroll.AutomaticCanvasSize=Enum.AutomaticSize.Y
+        local cmdBox=Instance.new("Frame",panel); cmdBox.Size=UDim2.new(1,-12,0,148); cmdBox.Position=UDim2.fromOffset(6,yOff); cmdBox.BackgroundColor3=Color3.fromRGB(5,10,5); cmdBox.BorderSizePixel=0; Instance.new("UICorner",cmdBox).CornerRadius=UDim.new(0,5); Instance.new("UIStroke",cmdBox).Color=Color3.fromRGB(40,100,40)
+        local cmdScroll=Instance.new("ScrollingFrame",cmdBox); cmdScroll.Size=UDim2.new(1,0,1,0); cmdScroll.BackgroundTransparency=1; cmdScroll.BorderSizePixel=0; cmdScroll.ScrollBarThickness=2; cmdScroll.ScrollBarImageColor3=Color3.fromRGB(60,180,60); cmdScroll.CanvasSize=UDim2.fromOffset(0,0); cmdScroll.AutomaticCanvasSize=Enum.AutomaticSize.Y
         local cmdLay=Instance.new("UIListLayout",cmdScroll); cmdLay.Padding=UDim.new(0,1); Instance.new("UIPadding",cmdScroll).PaddingLeft=UDim.new(0,4)
         local cmds={
-            "!pet <name>",
-            "!unpet <name>",
-            "!follow", "!stay", "!dance",
-            "!orbit", "!orbit <dist>",
-            "!wall", "!split", "!ring", "!stop",
-            "!carpet / !uncarpet",
-            "!attack <name>",
-            "!heart", "!sphere",
-            "!guard", "!spin <speed>",
-            "!say <text>",
-            "!gotto <name>", "!bring <name>",
-            "!hollow purple", "!trail",
-            "!slap <name>", "!throne",
-            "!judgement sword", "!rain",
-            "!wings", "!tornado", "!blackhole",
-            "!titanic",
-            "  ?forward / ?stop",
-            "  ?right / ?left",
-            "  ?anchor / ?unanchor",
-            "  ?sink",
+            "!pet <name> — give pet to player",
+            "!unpet <name> — remove player's pet",
+            "!follow — follow owner",
+            "!stay — stay in place",
+            "!dance — random dance",
+            "!orbit — orbit owner",
+            "!orbit <dist> — orbit at distance",
+            "!wall — wall in front",
+            "!split — split between owners",
+            "!ring — ring around owner",
+            "!stop — freeze completely",
+            "!carpet — carpet under feet",
+            "!uncarpet — remove carpet",
+            "!attack <name> — fling player",
+            "!heart — heart shape",
+            "!sphere — sphere shape",
+            "!guard — guard owner (fling nearby)",
+            "!spin <speed> — set spin speed",
+            "!say <text> — form text",
+            "!gotto <name> — carry owner to target",
+            "!bring <name> — bring target to owner",
         }
         for _,cmd in ipairs(cmds) do
             local l=Instance.new("TextLabel",cmdScroll); l.Text=cmd; l.Size=UDim2.new(1,0,0,14); l.BackgroundTransparency=1
-            l.TextColor3=Color3.fromRGB(120,210,255); l.TextSize=8; l.Font=Enum.Font.Gotham; l.TextXAlignment=Enum.TextXAlignment.Left
+            l.TextColor3=Color3.fromRGB(100,180,100); l.TextSize=8; l.Font=Enum.Font.Gotham; l.TextXAlignment=Enum.TextXAlignment.Left
         end
-        yOff=yOff+164
+        yOff=yOff+152
 
         -- Active owners list
-        local ownerHeader=Instance.new("TextLabel",panel); ownerHeader.Text="OWNERS"; ownerHeader.Size=UDim2.new(1,-10,0,14); ownerHeader.Position=UDim2.fromOffset(6,yOff); ownerHeader.BackgroundTransparency=1; ownerHeader.TextColor3=Color3.fromRGB(0,180,240); ownerHeader.TextSize=9; ownerHeader.Font=Enum.Font.GothamBold; ownerHeader.TextXAlignment=Enum.TextXAlignment.Left
+        local ownerHeader=Instance.new("TextLabel",panel); ownerHeader.Text="OWNERS"; ownerHeader.Size=UDim2.new(1,-10,0,14); ownerHeader.Position=UDim2.fromOffset(6,yOff); ownerHeader.BackgroundTransparency=1; ownerHeader.TextColor3=Color3.fromRGB(80,200,80); ownerHeader.TextSize=9; ownerHeader.Font=Enum.Font.GothamBold; ownerHeader.TextXAlignment=Enum.TextXAlignment.Left
         yOff=yOff+16
-        local listFrame=Instance.new("ScrollingFrame",panel); listFrame.Size=UDim2.new(1,-12,0,70); listFrame.Position=UDim2.fromOffset(6,yOff); listFrame.BackgroundColor3=Color3.fromRGB(2,12,30); listFrame.BorderSizePixel=0; listFrame.ScrollBarThickness=2; listFrame.ScrollBarImageColor3=Color3.fromRGB(0,160,220); listFrame.CanvasSize=UDim2.fromOffset(0,0); listFrame.AutomaticCanvasSize=Enum.AutomaticSize.Y; Instance.new("UICorner",listFrame).CornerRadius=UDim.new(0,4); Instance.new("UIStroke",listFrame).Color=Color3.fromRGB(0,100,180)
+        local listFrame=Instance.new("ScrollingFrame",panel); listFrame.Size=UDim2.new(1,-12,0,70); listFrame.Position=UDim2.fromOffset(6,yOff); listFrame.BackgroundColor3=Color3.fromRGB(5,10,5); listFrame.BorderSizePixel=0; listFrame.ScrollBarThickness=2; listFrame.ScrollBarImageColor3=Color3.fromRGB(60,180,60); listFrame.CanvasSize=UDim2.fromOffset(0,0); listFrame.AutomaticCanvasSize=Enum.AutomaticSize.Y; Instance.new("UICorner",listFrame).CornerRadius=UDim.new(0,4); Instance.new("UIStroke",listFrame).Color=Color3.fromRGB(40,100,40)
         Instance.new("UIListLayout",listFrame).Padding=UDim.new(0,1); Instance.new("UIPadding",listFrame).PaddingLeft=UDim.new(0,4)
         yOff=yOff+74
 
         -- Remove owner button
-        local remBtn=Instance.new("TextButton",panel); remBtn.Text="REMOVE ALL OWNERS"; remBtn.Size=UDim2.new(1,-12,0,26); remBtn.Position=UDim2.fromOffset(6,yOff); remBtn.BackgroundColor3=Color3.fromRGB(2,20,50); remBtn.TextColor3=Color3.fromRGB(255,100,120); remBtn.TextSize=9; remBtn.Font=Enum.Font.GothamBold; remBtn.BorderSizePixel=0; Instance.new("UICorner",remBtn); Instance.new("UIStroke",remBtn).Color=Color3.fromRGB(100,0,40)
+        local remBtn=Instance.new("TextButton",panel); remBtn.Text="REMOVE ALL OWNERS"; remBtn.Size=UDim2.new(1,-12,0,26); remBtn.Position=UDim2.fromOffset(6,yOff); remBtn.BackgroundColor3=Color3.fromRGB(50,12,12); remBtn.TextColor3=Color3.fromRGB(255,80,80); remBtn.TextSize=9; remBtn.Font=Enum.Font.GothamBold; remBtn.BorderSizePixel=0; Instance.new("UICorner",remBtn)
         remBtn.MouseButton1Click:Connect(function()
             petOwners={}; petOwnerList={}; petSplitOwners={}
             petState="idle"; rebuildPetOwnerList(listFrame)
@@ -2832,30 +2446,14 @@ local function main()
 
             elseif lower=="!unpet" then
                 if isOwner then
-                    petOwners[speakerName]=nil
+                    petOwners[speakerName] = nil
                     for idx,v in ipairs(petOwnerList) do
-                        if v==speakerName then table.remove(petOwnerList,idx);break end
+                        if v == speakerName then table.remove(petOwnerList, idx); break end
                     end
-                    petOwnerStates_global[speakerName]=nil
-                    petSplitOwners[speakerName]=nil
+                    petOwnerStates_global[speakerName] = nil
+                    petSplitOwners[speakerName] = nil
                     redistributeParts()
                 end
-            elseif lower=="!trail"       then setState("trail")
-            elseif lower=="!wings"       then setState("petwings")
-            elseif lower=="!throne"      then petThronePos=nil; setState("throne")
-            elseif lower=="!rain"        then setState("rain")
-            elseif lower=="!tornado"     then petSuckGen=petSuckGen+1; setState("tornado")
-            elseif lower=="!blackhole"   then petSuckGen=petSuckGen+1; setState("blackhole")
-            elseif lower=="!hollow purple" or lower=="!hollowpurple" then
-                petSwordTimer=0; setState("hollow_purple")
-            elseif lower=="!titanic" then
-                titanicPos=targetPos; titanicHeading=0; titanicSpeed=0
-                titanicAnchored=false; _titanicPositions=nil; setState("titanic")
-            elseif lower:match("^!slap%s+(.+)$") then
-                local sq=lower:match("^!slap%s+(.+)$")
-                local sp=findPlayer(sq); if sp then petSlapTarget=sp.Name; petSlapTimer=0; setState("slap") end
-            elseif lower=="!sword" or lower=="!judgement sword" then
-                petSwordTimer=0; setState("judgement_sword")
             end
 
             rebuildPetOwnerList(listFrame)
