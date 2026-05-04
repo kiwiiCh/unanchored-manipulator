@@ -1,5 +1,35 @@
 -- ============================================================
 -- UNANCHORED MANIPULATOR KII v17 -- DELTA EXECUTOR
+-- v13 FIXES:
+--   [1] Unanchored blocks move fast (BP P=800000, D=40000) with
+--       RunService.Heartbeat for smooth ~60fps, no lag.
+--   [2] Lock Blocks toggle FIXED: locked blocks cannot be dragged,
+--       high MaxForce (1e15) + CanCollide=false. Unlock restores
+--       normal BP strength. Locked blocks are completely excluded
+--       from all movement/formation updates.
+--   [3] Pet mode FIXED: script owner commands always work even
+--       when ownerless. Removed all JavaScript (was never there,
+--       but cleaned up any JS-like syntax). Pet chat handler
+--       properly gates script-owner vs pet-owner commands.
+--   [4] Gojo mode FIXED: state always resets to "idle" before any
+--       technique fires. Stop button reliably kills all active
+--       technique threads via a generation counter. Purple/Red
+--       auto-reset gojoState after completion.
+-- NEW COMMANDS (pet mode):
+--   !unpet <name>       remove a player's pet ownership
+--   !carpet             blocks carpet under owner's feet, speed boost
+--   !uncarpet           remove carpet mode
+--   !attack <name>      fling targeted player with deadly block
+--   !heart              blocks form heart shape
+--   !gotto <name>       swallow owner → carry to target → spit
+--   !bring <name>       swallow target player → carry to owner
+--   !spin <speed>       set spin speed for pet
+--   !say <text>         blocks form text letters
+--   !sphere             blocks form sphere
+--   !guard              fling nearby players except owner
+-- UPGRADES:
+--   Partial name matching (2+ chars) for all player-targeting cmds
+-- ============================================================
 local Players          = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local RunService       = game:GetService("RunService")
