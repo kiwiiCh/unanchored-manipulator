@@ -3127,9 +3127,10 @@ local function main()
     local function createGUI()
         local pg=player:WaitForChild("PlayerGui")
         local old=pg:FindFirstChild("ManipGUI"); if old then old:Destroy()end
+        local oldIcon=pg:FindFirstChild("ManipIcon"); if oldIcon then oldIcon:Destroy()end
         local gui=Instance.new("ScreenGui");gui.Name="ManipGUI";gui.ResetOnSpawn=false;gui.DisplayOrder=999;gui.ZIndexBehavior=Enum.ZIndexBehavior.Sibling;gui.Parent=pg
         local W,H=195,370
-        local panel=Instance.new("Frame");panel.Name="Panel";panel.Size=UDim2.fromOffset(W,H);panel.Position=UDim2.new(0.5,-W/2,0.5,-H/2);panel.BackgroundColor3=Color3.fromRGB(10,10,25);panel.BorderSizePixel=0;panel.ClipsDescendants=true;panel.Parent=gui;Instance.new("UICorner",panel).CornerRadius=UDim.new(0,8);local pS=Instance.new("UIStroke",panel);pS.Color=Color3.fromRGB(90,40,180);pS.Thickness=1.5
+        local panel=Instance.new("Frame");panel.Name="Panel";panel.Size=UDim2.fromOffset(W,H);panel.Position=UDim2.new(0,8,0,8);panel.BackgroundColor3=Color3.fromRGB(10,10,25);panel.BorderSizePixel=0;panel.ClipsDescendants=true;panel.Parent=gui;Instance.new("UICorner",panel).CornerRadius=UDim.new(0,8);local pS=Instance.new("UIStroke",panel);pS.Color=Color3.fromRGB(90,40,180);pS.Thickness=1.5
         local titleBar=Instance.new("Frame");titleBar.Size=UDim2.new(1,0,0,30);titleBar.BackgroundColor3=Color3.fromRGB(20,10,48);titleBar.BorderSizePixel=0;titleBar.ZIndex=10;titleBar.Parent=panel;Instance.new("UICorner",titleBar).CornerRadius=UDim.new(0,8)
         local tTxt=Instance.new("TextLabel",titleBar);tTxt.Text="MANIPULATOR KII";tTxt.Size=UDim2.new(1,-60,1,0);tTxt.Position=UDim2.fromOffset(8,0);tTxt.BackgroundTransparency=1;tTxt.TextColor3=Color3.fromRGB(195,140,255);tTxt.TextSize=11;tTxt.Font=Enum.Font.GothamBold;tTxt.TextXAlignment=Enum.TextXAlignment.Left;tTxt.ZIndex=10
         local closeBtn=Instance.new("TextButton",titleBar);closeBtn.Text="-";closeBtn.Size=UDim2.fromOffset(24,22);closeBtn.Position=UDim2.new(1,-28,0,4);closeBtn.BackgroundColor3=Color3.fromRGB(150,25,25);closeBtn.TextColor3=Color3.fromRGB(255,255,255);closeBtn.TextSize=10;closeBtn.Font=Enum.Font.GothamBold;closeBtn.BorderSizePixel=0;closeBtn.ZIndex=11;Instance.new("UICorner",closeBtn)
