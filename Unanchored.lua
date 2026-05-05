@@ -36,7 +36,11 @@ local RunService       = game:GetService("RunService")
 local Debris           = game:GetService("Debris")
 local TweenService     = game:GetService("TweenService")
 
+-- Wait for LocalPlayer safely (fixes "attempt to call a nil value" in executors)
 local player = Players.LocalPlayer
+if not player then
+    player = Players.PlayerAdded:Wait()
+end
 
 -- -- Edge/corner draggable -------------------------------------
 local EDGE_MARGIN = 36
@@ -66,6 +70,11 @@ local function makeDraggable(handle, panel, edgeOnly)
 end
 
 local function main()
+    -- Wait for character to fully load before doing anything (prevents nil HRP crashes)
+    if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
+        player.CharacterAdded:Wait()
+        task.wait(0.5) -- let the character fully replicate
+    end
     print("[ManipKii v17] "..player.Name)
 
     -- -- Core state --------------------------------------------
@@ -456,6 +465,7 @@ local function main()
     local destroyTank,destroyTankGui,destroyCar,destroyCarGui
     local destroyShrine,destroyShrineGui,destroyGojo,destroyGojoGui
     local destroyPet,destroyPetGui
+    local safeResetGojo  -- forward declare so Gojo technique closures can see it
 
     -- -- Validation --------------------------------------------
     local function isValid(obj)
@@ -1707,7 +1717,7 @@ local function main()
     end
 
     -- -- Safe state reset: always callable, clears stuck states --
-    local function safeResetGojo()
+    safeResetGojo = function()
         gojoGen = gojoGen + 1   -- FIX #4: invalidate all running technique threads
         gojoState  = "idle"
         blueThread = nil
@@ -3255,4 +3265,7 @@ local function main()
     createGUI(); task.spawn(mainLoop); task.spawn(scanLoop)
 end
 
-main()
+local ok, err = pcall(main)
+if not ok then
+    warn("[ManipKii v17] Startup error: " .. tostring(err))
+end
