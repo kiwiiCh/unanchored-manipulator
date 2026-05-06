@@ -1,46 +1,11 @@
--- ============================================================
--- UNANCHORED MANIPULATOR KII v17 -- DELTA EXECUTOR
--- v13 FIXES:
---   [1] Unanchored blocks move fast (BP P=800000, D=40000) with
---       RunService.Heartbeat for smooth ~60fps, no lag.
---   [2] Lock Blocks toggle FIXED: locked blocks cannot be dragged,
---       high MaxForce (1e15) + CanCollide=false. Unlock restores
---       normal BP strength. Locked blocks are completely excluded
---       from all movement/formation updates.
---   [3] Pet mode FIXED: script owner commands always work even
---       when ownerless. Removed all JavaScript (was never there,
---       but cleaned up any JS-like syntax). Pet chat handler
---       properly gates script-owner vs pet-owner commands.
---   [4] Gojo mode FIXED: state always resets to "idle" before any
---       technique fires. Stop button reliably kills all active
---       technique threads via a generation counter. Purple/Red
---       auto-reset gojoState after completion.
--- NEW COMMANDS (pet mode):
---   !unpet <name>       remove a player's pet ownership
---   !carpet             blocks carpet under owner's feet, speed boost
---   !uncarpet           remove carpet mode
---   !attack <name>      fling targeted player with deadly block
---   !heart              blocks form heart shape
---   !gotto <name>       swallow owner - carry to target - spit
---   !bring <name>       swallow target player - carry to owner
---   !spin <speed>       set spin speed for pet
---   !say <text>         blocks form text letters
---   !sphere             blocks form sphere
---   !guard              fling nearby players except owner
--- UPGRADES:
---   Partial name matching (2+ chars) for all player-targeting cmds
--- ============================================================
+-- UNANCHORED MANIPULATOR KII v17
 local Players          = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local RunService       = game:GetService("RunService")
 local Debris           = game:GetService("Debris")
 local TweenService     = game:GetService("TweenService")
 
--- Wait for LocalPlayer safely (fixes "attempt to call a nil value" in executors)
 local player = Players.LocalPlayer
-if not player then
-    player = Players.PlayerAdded:Wait()
-end
 
 -- -- Edge/corner draggable -------------------------------------
 local EDGE_MARGIN = 36
@@ -70,11 +35,6 @@ local function makeDraggable(handle, panel, edgeOnly)
 end
 
 local function main()
-    -- Wait for character to fully load before doing anything (prevents nil HRP crashes)
-    if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
-        player.CharacterAdded:Wait()
-        task.wait(0.5) -- let the character fully replicate
-    end
     print("[ManipKii v17] "..player.Name)
 
     -- -- Core state --------------------------------------------
@@ -465,7 +425,6 @@ local function main()
     local destroyTank,destroyTankGui,destroyCar,destroyCarGui
     local destroyShrine,destroyShrineGui,destroyGojo,destroyGojoGui
     local destroyPet,destroyPetGui
-    local safeResetGojo  -- forward declare so Gojo technique closures can see it
 
     -- -- Validation --------------------------------------------
     local function isValid(obj)
@@ -499,7 +458,7 @@ local function main()
         -- that is still server-visible because it goes through BodyPosition physics.
         pcall(function()
             part.CustomPhysicalProperties = PhysicalProperties.new(0.01,0.3,0.5,1,1)
-            part.Massless = true
+            pcall(function() part.Massless=true end)
         end)
         -- P=300000, D=8000: with near-zero mass these values move blocks near-instantly
         -- without causing jitter. MaxForce=1e9 is enough for massless parts.
@@ -530,7 +489,7 @@ local function main()
                 if data.origColor    then part.Color=data.origColor end
                 if data.origMaterial then part.Material=data.origMaterial end
                 -- Restore original mass / physics properties
-                part.Massless = data.origMassless or false
+                pcall(function() part.Massless = data.origMassless or false end)
                 if data.origPhysProps then
                     part.CustomPhysicalProperties = data.origPhysProps
                 end
@@ -1654,7 +1613,7 @@ local function main()
                     pcall(function() obj:SetNetworkOwner(player) end)
                     pcall(function()
                         obj.CustomPhysicalProperties=PhysicalProperties.new(0.01,0.3,0.5,1,1)
-                        obj.Massless=true
+                        pcall(function() obj.Massless=true end)
                     end)
                     if not controlled[obj] then
                         local origCC=obj.CanCollide; local origAnch=obj.Anchored
@@ -1717,7 +1676,7 @@ local function main()
     end
 
     -- -- Safe state reset: always callable, clears stuck states --
-    safeResetGojo = function()
+    local function safeResetGojo()
         gojoGen = gojoGen + 1   -- FIX #4: invalidate all running technique threads
         gojoState  = "idle"
         blueThread = nil
@@ -3267,5 +3226,28 @@ end
 
 local ok, err = pcall(main)
 if not ok then
-    warn("[ManipKii v17] Startup error: " .. tostring(err))
+    -- Show error in a visible GUI so we can debug
+    local sg2 = Instance.new("ScreenGui")
+    sg2.Name = "ManipError"; sg2.ResetOnSpawn = false
+    local ok2 = pcall(function()
+        sg2.Parent = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui")
+    end)
+    local f2 = Instance.new("Frame", sg2)
+    f2.Size = UDim2.new(0.9,0,0,120)
+    f2.Position = UDim2.new(0.05,0,0.05,0)
+    f2.BackgroundColor3 = Color3.fromRGB(30,0,0)
+    Instance.new("UICorner", f2)
+    local t2 = Instance.new("TextLabel", f2)
+    t2.Size = UDim2.new(1,-8,1,-8)
+    t2.Position = UDim2.fromOffset(4,4)
+    t2.BackgroundTransparency = 1
+    t2.TextColor3 = Color3.fromRGB(255,80,80)
+    t2.TextSize = 11
+    t2.Font = Enum.Font.Code
+    t2.TextWrapped = true
+    t2.TextXAlignment = Enum.TextXAlignment.Left
+    t2.TextYAlignment = Enum.TextYAlignment.Top
+    t2.Text = "ManipKii v17 ERROR:
+" .. tostring(err)
+    task.delay(15, function() if sg2 and sg2.Parent then sg2:Destroy() end end)
 end
