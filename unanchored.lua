@@ -2014,7 +2014,7 @@ local function main()
     end
 
     local petGottoActive=false
-    function petGotto(targetPlayer)
+    local function petGotto(targetPlayer)
         if petGottoActive then return end; petGottoActive=true
         local prevState=petState; local prevOrbitDst=petOrbitDist
         local ownerName=petOwnerList[1] or player.Name
@@ -2038,7 +2038,7 @@ local function main()
     end
 
     local petBringActive=false
-    function petBring(targetPlayer)
+    local function petBring(targetPlayer)
         if petBringActive then return end; petBringActive=true
         local prevState=petState; local prevOrbitDst=petOrbitDist
         local targChar=targetPlayer.Character; if not targChar then petBringActive=false; return end
@@ -3247,7 +3247,6 @@ if not ok then
     t2.TextWrapped = true
     t2.TextXAlignment = Enum.TextXAlignment.Left
     t2.TextYAlignment = Enum.TextYAlignment.Top
-    t2.Text = "ManipKii v17 ERROR:
-" .. tostring(err)
+    t2.Text = "ManipKii ERROR: "..tostring(err)
     task.delay(15, function() if sg2 and sg2.Parent then sg2:Destroy() end end)
 end
