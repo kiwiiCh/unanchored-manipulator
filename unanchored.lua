@@ -321,7 +321,9 @@ local function grabPart(part)
     if controlled[part]then return end
     if not isValid(part)then return end
     local char=player.Character; local root=char and(char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso"))
-    local effectiveRange=(pullStrength>=5000) and math.huge or detectionRange
+    local _ps = pullStrength or 50000
+    local _dr = detectionRange or math.huge
+    local effectiveRange=(_ps>=5000) and math.huge or _dr
     if root and(part.Position-root.Position).Magnitude>effectiveRange then return end
     local origCC=part.CanCollide; local origAnch=part.Anchored
     local origMassless = part.Massless
@@ -476,7 +478,8 @@ local function getAimPoint(dist)
 end
 
 local function getSnakeTarget(i)
-    local idx=math.clamp(i*SNAKE_GAP,1,math.max(1,#snakeHistory))
+    local _sg = SNAKE_GAP or 2
+    local idx=math.clamp(i*_sg,1,math.max(1,#snakeHistory))
     return snakeHistory[idx] or snakeHistory[#snakeHistory] or Vector3.zero
 end
 
@@ -1142,18 +1145,12 @@ local function addFlingOnTouch(part, _flingVelocity)
     task.delay(10, function() pcall(function() conn:Disconnect() end) end)
 end
 
--- -- Cooldown tracker -------------------------------------
-local gojoLastFire = { blue=0, red=0, purple=0 }
-local BLUE_CD   = 12   -- seconds (10s duration + 2s buffer)
-local RED_CD    = 4
-local PURPLE_CD = 6
--- FIX #4: Generation counter - increment to kill any running technique thread
-local gojoGen = 0
+-- -- Cooldown tracker (vars declared at module scope above) ------
 
 -- -- Max Blue ---------------------------------------------
 -- Blocks scatter outward then get pulled back to aim point cyclically.
 -- Runs for 10 seconds then auto-stops.
-local blueThread = nil
+blueThread = nil  -- uses module-scope var
 local function fireMaxBlue()
     local now = tick()
     if now - gojoLastFire.blue < BLUE_CD and gojoState == "blue_hold" then
@@ -3024,7 +3021,7 @@ local function main()
             if activeMode=="pet"           then updatePet(dt,pos) end
 
             table.insert(snakeHistory,1,pos)
-            if #snakeHistory>SNAKE_HIST_MAX then table.remove(snakeHistory,SNAKE_HIST_MAX+1) end
+            if #snakeHistory>(SNAKE_HIST_MAX or 300) then table.remove(snakeHistory,SNAKE_HIST_MAX+1) end
 
             -- Mode transitions
             if activeMode~=lastMode then
