@@ -250,6 +250,52 @@ local WING_POINT_COUNT=#WING_POINTS
 -- -- Part tracking -----------------------------------------
 local controlled={}; local partCount=0
 
+-- -- Core state (module scope for cross-function access) --------
+local isActivated = false
+local activeMode = "none"
+local lastMode = "none"
+local scriptAlive = true
+local radius = 7
+local detectionRange = math.huge
+local pullStrength = 50000
+local spinSpeed = 0
+local spinAngle = 0
+local lockedBlocks = false
+local snakeT = 0
+local snakeHistory = {}
+local SNAKE_HIST_MAX = 300
+local SNAKE_GAP = 2
+local gasterAnim = "pointing"
+local gasterT = 0
+local gasterSubGui = nil
+local sphereSubGui = nil
+local sphereMode = "orbit"
+local spherePos = Vector3.new(0,0,0)
+local sphereVel = Vector3.new(0,0,0)
+local sphereOrbitAngle = 0
+local SPHERE_RADIUS = 6
+local SPHERE_SPEED = 1.2
+local SPHERE_SPRING = 8
+local SPHERE_DAMP = 4
+local sbSubGui = nil
+local sbSpheres = {}
+local savedWS = 16
+local savedJP = 50
+local savedAR = true
+local gojoActive = false
+local gojoState = "idle"
+local gojoOrbitAngle = 0
+local gojoGen = 0
+local gojoLastFire = {blue=0,red=0,purple=0}
+local gojoSubGui = nil
+local blueThread = nil
+local BLUE_CD = 12
+local RED_CD = 4
+local PURPLE_CD = 6
+local tankActive = false
+local carActive = false
+local shrineActive = false
+
 -- -- Forward declarations ----------------------------------
 local sweepMap,fullSweep,rebuildSBGui
 local destroyTank,destroyTankGui,destroyCar,destroyCarGui
@@ -1755,9 +1801,9 @@ local function main()
     print("[ManipKii v17] "..player.Name)
 
     -- -- Core state --------------------------------------------
-    local isActivated=false; local activeMode="none"; local lastMode="none"
-    local scriptAlive=true; local radius=7; local detectionRange=math.huge
-    local pullStrength=50000; local spinSpeed=0; local spinAngle=0
+    isActivated=false; activeMode="none"; lastMode="none"
+    scriptAlive=true; radius=7; detectionRange=math.huge
+    pullStrength=50000; spinSpeed=0; spinAngle=0
 
     local function applyStrengthToAll()
         if not controlled then return end
@@ -1772,16 +1818,16 @@ local function main()
 
 
     -- -- Snake / Gaster / Sphere / SphereBender state ----------
-    local snakeT=0; local snakeHistory={}; local SNAKE_HIST_MAX=300; local SNAKE_GAP=2
-    local gasterAnim="pointing"; local gasterT=0; local gasterSubGui=nil
-    local sphereSubGui=nil; local sphereMode="orbit"
-    local spherePos=Vector3.new(0,0,0); local sphereVel=Vector3.new(0,0,0); local sphereOrbitAngle=0
-    local SPHERE_RADIUS=6; local SPHERE_SPEED=1.2; local SPHERE_SPRING=8; local SPHERE_DAMP=4
-    local sbSubGui=nil; local sbSpheres={}
+    snakeT=0; snakeHistory={}; SNAKE_HIST_MAX=300; SNAKE_GAP=2
+    gasterAnim="pointing"; gasterT=0; gasterSubGui=nil
+    sphereSubGui=nil; sphereMode="orbit"
+    spherePos=Vector3.new(0,0,0); sphereVel=Vector3.new(0,0,0); sphereOrbitAngle=0
+    SPHERE_RADIUS=6; SPHERE_SPEED=1.2; SPHERE_SPRING=8; SPHERE_DAMP=4
+    sbSubGui=nil; sbSpheres={}
     local function newSBSphere(p) return{pos=p or Vector3.zero,vel=Vector3.zero,orbitAngle=0,mode="orbit",stopped=false,selected=false}end
 
     -- -- Humanoid freeze/thaw ---------------------------------
-    local savedWS=16; local savedJP=50; local savedAR=true
+    savedWS=16; savedJP=50; savedAR=true
     local function freezePlayer(anchorCF)
         local char=player.Character; if not char then return end
         local hum=char:FindFirstChildOfClass("Humanoid"); local hrp=char:FindFirstChild("HumanoidRootPart")
@@ -1798,7 +1844,7 @@ local function main()
     end
 
     -- -- Tank state --------------------------------------------
-    local tankSubGui=nil; local tankActive=false
+    local tankSubGui=nil; tankActive=false
     local cameraOrbitAngle=0; local cameraPitchAngle=math.rad(25)
     local CAM_PITCH_MIN=math.rad(8); local CAM_PITCH_MAX=math.rad(70)
     local CAMERA_DIST=24; local frozenTankCF=nil
@@ -1811,7 +1857,7 @@ local function main()
     local tankRayParams=RaycastParams.new(); tankRayParams.FilterType=Enum.RaycastFilterType.Exclude
 
     -- -- Car state ---------------------------------------------
-    local carSubGui=nil; local carActive=false; local frozenCarCF=nil
+    local carSubGui=nil; carActive=false; local frozenCarCF=nil
     local cs={doorOpen=false,carBase=nil,carDoor=nil,carParts={},partOffsets={},currentSpeed=0,currentTurnSpeed=0}
     local CAR_H=2.8; local CAR_INTERIOR_Y=CAR_H/2+1.8
     local CAR_SPEED=48; local CAR_TURN=2.8; local CAR_ACCEL=20; local CAR_FRIC=0.88
@@ -1819,7 +1865,7 @@ local function main()
     local carRayParams=RaycastParams.new(); carRayParams.FilterType=Enum.RaycastFilterType.Exclude
 
     -- -- DE Shrine state ---------------------------------------
-    local shrineSubGui=nil; local shrineActive=false
+    local shrineSubGui=nil; shrineActive=false
     -- Phase: "inactive" / "underground" / "closing" / "closed" / "opening"
     local shrinePhase="inactive"
     local shrineCenter=Vector3.zero
@@ -1900,10 +1946,10 @@ local function main()
     end
 
     -- -- Gojo state --------------------------------------------
-    local gojoSubGui=nil; local gojoActive=false
+    gojoSubGui=nil; gojoActive=false
     -- "idle" / "blue_hold" / "red_charge" / "red_fire" / "purple_split" / "purple_fire" / "de_infinity"
-    local gojoState="idle"
-    local gojoOrbitAngle=0
+    gojoState="idle"
+    gojoOrbitAngle=0
     local gojoInfinityRadius=28
     local gojoInfinityAngle=0
     local RED_PART_COUNT=10  -- how many parts reversal red uses
@@ -1920,7 +1966,7 @@ local function main()
     -- SetNetworkOwner(player) re-asserted each sweep, and CanCollide=false
     -- so nobody can physically shove them.  The BP/BG already resist movement;
     -- the extra MaxForce and ownership re-claim make them immovable.
-    local lockedBlocks = false
+    lockedBlocks = false
 
 
     local function getPlayerRoot(name)
