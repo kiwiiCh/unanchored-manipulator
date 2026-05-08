@@ -249,6 +249,9 @@ local WING_POINT_COUNT=#WING_POINTS
 
 -- -- Part tracking -----------------------------------------
 local controlled={}; local partCount=0
+local RED_PART_COUNT = 10  -- reversal red part count
+-- Car state (module scope so destroyCar/car functions can access it)
+local cs={doorOpen=false,carBase=nil,carDoor=nil,carParts={},partOffsets={},currentSpeed=0,currentTurnSpeed=0,steerAngle=0,frozenCF=nil,boostTimer=0}
 
 -- -- Core state (module scope for cross-function access) --------
 local isActivated = false
@@ -1855,7 +1858,7 @@ local function main()
 
     -- -- Car state ---------------------------------------------
     local carSubGui=nil; carActive=false; local frozenCarCF=nil
-    local cs={doorOpen=false,carBase=nil,carDoor=nil,carParts={},partOffsets={},currentSpeed=0,currentTurnSpeed=0}
+    cs={doorOpen=false,carBase=nil,carDoor=nil,carParts={},partOffsets={},currentSpeed=0,currentTurnSpeed=0}
     local CAR_H=2.8; local CAR_INTERIOR_Y=CAR_H/2+1.8
     local CAR_SPEED=48; local CAR_TURN=2.8; local CAR_ACCEL=20; local CAR_FRIC=0.88
     local carJoy={active=false,origin=Vector2.zero,current=Vector2.zero,radius=70,deadzone=8,touchId=nil,forward=0,turn=0}
@@ -1949,7 +1952,7 @@ local function main()
     gojoOrbitAngle=0
     local gojoInfinityRadius=28
     local gojoInfinityAngle=0
-    local RED_PART_COUNT=10  -- how many parts reversal red uses
+    -- RED_PART_COUNT declared at module scope above
 
     -- -- Mode tables -------------------------------------------
     local CFRAME_MODES={heart=true,rings=true,wall=true,box=true,gasterhand=true,gaster2hands=true,wings=true,sphere=true,spherebender=true,tank=true,car=true,de_shrine=true,gojo=true,pet=true}
@@ -2254,7 +2257,7 @@ local function main()
                     local sayPos=buildSayPositions(petSayText or "HI")
                     local nPos=math.max(1,#sayPos)
                     local sp=sayPos[((i-1)%nPos)+1]
-                    tgt=targetPos+Vector3.new(sp.X*1.4, sp.Y+2, sp.Z-2)
+                    tgt=targetPos+Vector3.new(sp.X*2.0, sp.Y*2.0+3, -1)
 
 
                 -- TRAIL
@@ -2262,29 +2265,39 @@ local function main()
                     local idx2=math.clamp(i*3,1,math.max(1,#petTrailHistory))
                     tgt=(petTrailHistory[idx2] or targetPos)+Vector3.new(0,1,0)
 
-                -- WINGS
+                -- WINGS: exact same as main wings mode using getWingCF
                 elseif mode2=="petwings" then
                     local half2=math.ceil(n/2); local side2=(i<=half2) and 1 or -1
-                    local wi2=(i<=half2) and i or (i-half2)
-                    local flap2=math.sin(orbitT*3)*(math.pi/5)
-                    local spanR=wi2/math.max(half2,1)*petOrbitDist
-                    local wAng2=flap2+side2*(math.pi/6)
-                    tgt=targetPos+Vector3.new(side2*(spanR*math.cos(wAng2)),spanR*math.sin(math.abs(wAng2))*0.4+2,-wi2*0.8)
+                    local ptIdx=(i<=half2) and i or (i-half2)
+                    local wCF=getWingCF(((ptIdx-1)%WING_POINT_COUNT)+1, side2,
+                        CFrame.new(targetPos)*CFrame.fromAxisAngle(Vector3.new(0,1,0),0), orbitT)
+                    tgt=wCF.Position
 
-                -- THRONE
+                -- THRONE: proper throne shape - wide seat, tall back, armrests
                 elseif mode2=="throne" then
                     if not petThronePos then petThronePos=targetPos end
                     local base2=petThronePos
-                    local seatN=math.floor(n*0.3); local backN=math.floor(n*0.6)
-                    if i<=seatN then
-                        local col2=(i-1)%4-1; local row2=math.floor((i-1)/4)
-                        tgt=base2+Vector3.new(col2*1.5,1,row2*1.5)
-                    elseif i<=backN then
-                        local bi=i-seatN; local col2=(bi-1)%4-1; local row2=math.floor((bi-1)/4)+2
-                        tgt=base2+Vector3.new(col2*1.5,row2*1.5,-2)
+                    -- Seat: 5x3 flat platform at y=2
+                    local seatW=5; local seatD=3; local seatTotal=seatW*seatD
+                    -- Back: 5 wide, 6 tall vertical wall
+                    local backW=5; local backH=6; local backTotal=backW*backH
+                    -- Armrests: 2 sides, 4 long each side
+                    local armL=4
+                    if i<=seatTotal then
+                        local col2=((i-1)%seatW)-(seatW-1)/2
+                        local row2=math.floor((i-1)/seatW)-(seatD-1)/2
+                        tgt=base2+Vector3.new(col2*1.5, 2, row2*1.5)
+                    elseif i<=seatTotal+backTotal then
+                        local bi=i-seatTotal
+                        local col2=((bi-1)%backW)-(backW-1)/2
+                        local row2=math.floor((bi-1)/backW)+1
+                        tgt=base2+Vector3.new(col2*1.5, 2+row2*1.5, -(seatD/2+0.5)*1.5)
                     else
-                        local ai=i-backN; local side2=(ai%2==0) and 3 or -3; local row2=math.floor((ai-1)/2)
-                        tgt=base2+Vector3.new(side2,row2*1.5+1,0)
+                        local ai=i-seatTotal-backTotal
+                        local side2=((ai-1)<armL) and -((seatW+1)/2*1.5) or ((seatW+1)/2*1.5)
+                        local aidx=((ai-1)%armL)+1
+                        local row2=aidx-(seatD-1)/2
+                        tgt=base2+Vector3.new(side2, 2, row2*1.5)
                     end
 
                 -- JUDGEMENT SWORD
@@ -2351,21 +2364,39 @@ local function main()
                     local tPos2=getTitanicPositions(); local tLen=#tPos2
                     if tLen>0 then
                         local offset=tPos2[((i-1)%tLen)+1]
-                        tgt=titanicPos+CFrame.fromAxisAngle(Vector3.new(0,1,0),titanicHeading):VectorToWorldSpace(offset)
+                        local _tp3 = titanicPos or Vector3.new(0,0,0)
+                        tgt=_tp3+CFrame.fromAxisAngle(Vector3.new(0,1,0),titanicHeading or 0):VectorToWorldSpace(offset)
                     else tgt=targetPos end
 
-                -- TORNADO
+                -- TORNADO: 10 stacked rings, small at top, large at bottom + twirl leg
                 elseif mode2=="tornado" then
-                    local t3=(i-1)/math.max(n-1,1); local torR=t3*6+0.5
-                    local torAng=orbitT*5+(i-1)*(math.pi*2/math.max(n,1))+t3*math.pi*2
-                    tgt=targetPos+Vector3.new(math.cos(torAng)*torR,20*(1-t3),math.sin(torAng)*torR)
+                    local LAYERS=10; local RING_N=math.max(1,math.floor(n*0.9/LAYERS))
+                    local LEG_N=n - RING_N*LAYERS
+                    if i <= RING_N*LAYERS then
+                        local layer=math.floor((i-1)/RING_N)  -- 0=top,9=bottom
+                        local ringIdx=(i-1)%RING_N
+                        local layerR=(layer+1)*1.6  -- each layer 1.6x bigger
+                        local layerY=20-layer*2.2   -- descend
+                        local ang=orbitT*(5-layer*0.4)+(ringIdx/RING_N)*math.pi*2
+                        tgt=targetPos+Vector3.new(math.cos(ang)*layerR,layerY,math.sin(ang)*layerR)
+                    else
+                        -- Twirl leg: tight helix going down below the tornado
+                        local li=i-RING_N*LAYERS; local legN=math.max(1,LEG_N)
+                        local legT=(li-1)/legN; local legAng=orbitT*8+legT*math.pi*6
+                        local legR=0.5+legT*0.3
+                        tgt=targetPos+Vector3.new(math.cos(legAng)*legR,-legT*3,math.sin(legAng)*legR)
+                    end
 
-                -- BLACKHOLE
-                elseif mode2=="blackhole" then
+                -- VORTEX: fast-spinning disk that sucks in nearby parts
+                elseif mode2=="vortex" then
                     local ring=math.floor((i-1)/8); local seg2=(i-1)%8
-                    local bhR=(ring+1)*1.8
-                    local bhAng=orbitT*(3-ring*0.5)+seg2*(math.pi*2/8)+ring*(math.pi/4)
-                    tgt=targetPos+Vector3.new(math.cos(bhAng)*bhR,math.sin(bhAng)*bhR*0.3+2,math.sin(bhAng)*bhR)
+                    local bhR=(ring+1)*2.0
+                    local bhAng=orbitT*(5-ring*0.3)+seg2*(math.pi*2/8)
+                    tgt=targetPos+Vector3.new(math.cos(bhAng)*bhR, math.sin(bhAng*0.3)*0.5+1.5, math.sin(bhAng)*bhR)
+
+                -- BLACKHOLE DOT: single dot - all blocks converge to one point
+                elseif mode2=="blackhole_dot" then
+                    tgt=targetPos+Vector3.new(0,3,0)
 
                 else -- default hover above
                     tgt=targetPos+Vector3.new(0,4,0)
@@ -2405,7 +2436,7 @@ local function main()
         end
 
         -- Tornado/blackhole: suck nearby unanchored parts
-        if petState=="tornado" or petState=="blackhole" then
+        if petState=="tornado" or petState=="vortex" or petState=="blackhole_dot" then
             for _,obj in ipairs(workspace:GetDescendants()) do
                 if obj:IsA("BasePart") and not obj.Anchored and not controlled[obj] and obj.Parent then
                     local isChar2=false; local pp2=obj.Parent
@@ -2415,7 +2446,7 @@ local function main()
                     end
                     if not isChar2 then
                         pcall(function() obj:SetNetworkOwner(player) end)
-                        local pullStr=(petState=="blackhole") and 110 or 55
+                        local pullStr=petState=="blackhole_dot" and 200 or (petState=="vortex" and 110 or 55)
                         local bv2=obj:FindFirstChildOfClass("BodyVelocity")
                         if not bv2 then
                             bv2=Instance.new("BodyVelocity")
@@ -2475,6 +2506,11 @@ local function main()
     end
 
     destroyPet=function()
+        petState="idle"; petOrbitDist=8; petSpinSpeed=0
+        petSwordTimer=0; petSlapTimer=0; petSlapTarget=nil
+        petThronePos=nil; petTrailHistory={}; petSuckGen=petSuckGen+1
+        petAttackTarget=nil; petAttackFired=false; petGuardActive=false
+        petSayText=nil; _titanicPositions=nil
         -- Remove carpet speed boosts
         for ownerName,_ in pairs(petCarpetOwners) do removeCarpetBoost(ownerName) end
         petCarpetOwners={}; petAttackTarget=nil; petAttackFired=false
@@ -2604,7 +2640,7 @@ local function main()
             "!hollow purple","!trail",
             "!slap <name>","!throne",
             "!sword","!rain","!wings",
-            "!tornado","!blackhole","!titanic",
+            "!tornado","!vortex","!titanic",
             "  ?forward / ?stop",
             "  ?right / ?left",
             "  ?anchor / ?unanchor / ?sink",
@@ -2725,8 +2761,8 @@ local function main()
                 end
 
                 -- !spin <speed>
-                local spinNum = lower:match("^!spin%s+([%d%.%-]+)$")
-                if spinNum then petSpinSpeed = tonumber(spinNum) or 0; return end
+                local speedMatch = lower:match("^!speed%s+([%d%.%-]+)$")
+                if speedMatch then petSpinSpeed = tonumber(speedMatch) or 0; return end
 
                 -- !say <text>
                 local sayText = lower:match("^!say%s+(.+)$")
@@ -2747,10 +2783,15 @@ local function main()
                 if lower=="!judgement sword" or lower=="!judgementsword" or lower=="!sword" then
                     petState="judgement_sword"; petSwordTimer=0; return
                 end
-                if lower=="!rain"      then petState="rain"; return end
+                local rainMatch=lower:match("^!rain%s*([%d]*)$")
+                if rainMatch then
+                    if rainMatch~="" then petOrbitDist=tonumber(rainMatch) or petOrbitDist end
+                    petState="rain"; return
+                end
                 if lower=="!wings"     then petState="petwings"; return end
                 if lower=="!tornado"   then petSuckGen=petSuckGen+1; petState="tornado"; return end
-                if lower=="!blackhole" then petSuckGen=petSuckGen+1; petState="blackhole"; return end
+                if lower=="!vortex"    then petSuckGen=petSuckGen+1; petState="vortex"; return end
+                if lower=="!blackhole" then petSuckGen=petSuckGen+1; petState="blackhole_dot"; return end
                 if lower=="!titanic"   then
                     local ch3=player.Character
                     local hrp3=ch3 and (ch3:FindFirstChild("HumanoidRootPart") or ch3:FindFirstChild("Torso"))
@@ -2852,13 +2893,22 @@ local function main()
             elseif lower=="!trail"       then setState("trail")
             elseif lower=="!wings"       then setState("petwings")
             elseif lower=="!throne"      then petThronePos=nil; setState("throne")
-            elseif lower=="!rain"        then setState("rain")
-            elseif lower=="!tornado"     then setState("tornado")
-            elseif lower=="!blackhole"   then setState("blackhole")
+            elseif lower:match("^!rain%s*%d*$") then
+                local rm=lower:match("^!rain%s*(%d+)$")
+                if rm then petOrbitDist=tonumber(rm) or petOrbitDist end
+                setState("rain")
+            elseif lower=="!tornado"        then setState("tornado")
+            elseif lower=="!vortex"         then setState("vortex")
+            elseif lower=="!blackhole"      then setState("blackhole_dot")
+            elseif lower=="!vortex"   then setState("vortex")
             elseif lower=="!hollow purple" or lower=="!hollowpurple" then
                 petSwordTimer=0; setState("hollow_purple")
             elseif lower=="!titanic" then
-                titanicPos=targetPos; titanicHeading=0; titanicSpeed=0
+                local _tp2=findPlayer(speakerName)
+                local _tc2=_tp2 and _tp2.Character
+                local _th2=_tc2 and (_tc2:FindFirstChild("HumanoidRootPart") or _tc2:FindFirstChild("Torso"))
+                titanicPos=_th2 and _th2.Position or Vector3.new(0,0,0)
+                titanicHeading=0; titanicSpeed=0
                 titanicAnchored=false; _titanicPositions=nil; setState("titanic")
             elseif lower:match("^!slap%s+(.+)$") then
                 local sq2=lower:match("^!slap%s+(.+)$"); local sp3=findPlayer(sq2)
@@ -2992,6 +3042,7 @@ local function main()
     -- ------------------------------------------------------------
     -- MAIN LOOP (Heartbeat = after physics, smooth 60fps, no lag)
     -- ------------------------------------------------------------
+    local _prevMode = "none"  -- track mode changes for cleanup
     local function mainLoop()
         RunService.Heartbeat:Connect(function(dt)
             if not scriptAlive then return end
