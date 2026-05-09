@@ -1,4 +1,4 @@
--- UNANCHORED MANIPULATOR KII v17 (DEBUGGED) 
+-- UNANCHORED MANIPULATOR KII v17
 local Players          = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local RunService       = game:GetService("RunService")
