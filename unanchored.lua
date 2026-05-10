@@ -2095,6 +2095,28 @@ local function isValid(obj)
     return true
 end
 
+-- claimOwnership: uses firetouchinterest (Delta) + SetNetworkOwner
+-- Together these ensure BodyPosition physics replicate to ALL clients
+local function claimOwnership(part)
+    local char = player.Character
+    local hrp  = char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso"))
+    -- Delta executor: firetouchinterest makes the server assign network ownership to us
+    if hrp then
+        pcall(function()
+            if firetouchinterest then
+                firetouchinterest(part, hrp, 0)
+            end
+        end)
+    end
+    -- Standard: SetNetworkOwner (works in most games without anticheat)
+    pcall(function() part:SetNetworkOwner(player) end)
+    -- Reduce mass so forces are more effective with less lag
+    pcall(function()
+        part.CustomPhysicalProperties = PhysicalProperties.new(0.01,0.3,0.5,1,1)
+        part.Massless = true
+    end)
+end
+
 -- -- Part grab / release -----------------------------------
 local function grabPart(part)
     if controlled[part]then return end
@@ -2108,8 +2130,7 @@ local function grabPart(part)
     local origMassless = part.Massless
     local origPhysProps = part.CustomPhysicalProperties
     pcall(function()part.CanCollide=false end)
-    -- Set network ownership so our physics forces replicate to server and all clients
-    pcall(function()part:SetNetworkOwner(player)end)
+    claimOwnership(part)  -- firetouchinterest + SetNetworkOwner + massless
     -- Near-zero mass: density 0.01 = minimum allowed in Roblox.
     -- Less mass means same P value produces ~70x more acceleration - much faster movement
     -- that is still server-visible because it goes through BodyPosition physics.
@@ -3262,11 +3283,7 @@ local function detectAllPartsForGojo()
             end
             if not isChar then
                 pcall(function() obj.CanCollide=false end)
-                pcall(function() obj:SetNetworkOwner(player) end)
-                pcall(function()
-                    obj.CustomPhysicalProperties=PhysicalProperties.new(0.01,0.3,0.5,1,1)
-                    pcall(function() obj.Massless=true end)
-                end)
+                claimOwnership(obj)  -- firetouchinterest + SetNetworkOwner + massless
                 if not controlled[obj] then
                     local origCC=obj.CanCollide; local origAnch=obj.Anchored
                     local origM=obj.Massless; local origPP=obj.CustomPhysicalProperties
@@ -4038,8 +4055,18 @@ local function main()
 
                 -- TRAIL
                 elseif mode2=="trail" then
-                    local idx2=math.clamp(i*3,1,math.max(1,#petTrailHistory))
-                    tgt=(petTrailHistory[idx2] or targetPos)+Vector3.new(0,1,0)
+                    -- Use the OWNER's trail history (not the script user's)
+                    local ownerKey=nil
+                    for _,owN in ipairs(petOwnerList) do
+                        local owParts=petSplitOwners[owN]
+                        if owParts then
+                            for _,pp in ipairs(owParts) do if pp==part then ownerKey=owN; break end end
+                        end
+                        if ownerKey then break end
+                    end
+                    local trailSrc=(ownerKey and petOwnerStates_global[ownerKey.."_trail"]) or petTrailHistory
+                    local idx2=math.clamp(i*3,1,math.max(1,#trailSrc))
+                    tgt=(trailSrc[idx2] or targetPos)+Vector3.new(0,1,0)
 
                 -- WINGS: exact same as main wings mode using getWingCF
                 elseif mode2=="petwings" then
@@ -4078,18 +4105,29 @@ local function main()
 
                 -- JUDGEMENT SWORD
                 elseif mode2=="judgement_sword" then
-                    local bladeN=math.floor(n*0.6); local guardN=math.max(1,math.floor(n*0.15))
-                    local slashAng=petSwordTimer*4
-                    local swordCF=CFrame.fromAxisAngle(Vector3.new(0,1,0),slashAng)
-                    if i<=bladeN then
-                        local t3=(i-1)/math.max(bladeN-1,1)
-                        tgt=targetPos+swordCF:VectorToWorldSpace(Vector3.new(0,t3*8+1,0))+Vector3.new(0,2,0)
-                    elseif i<=bladeN+guardN then
-                        local gi=i-bladeN; local gOff=(gi/(guardN+1)-0.5)*4
-                        tgt=targetPos+swordCF:VectorToWorldSpace(Vector3.new(gOff,1,0))+Vector3.new(0,2,0)
+                    -- Minecraft-style diamond sword: diagonal blade, crossguard, handle
+                    local slashAng=petSwordTimer*4  -- slash rotation
+                    local sCF=CFrame.fromAxisAngle(Vector3.new(0,1,0),slashAng)
+                    -- Sword anatomy (Minecraft style, all diagonal):
+                    -- Handle: 2 blocks going down
+                    -- Guard: 3 blocks horizontal
+                    -- Blade: 8 blocks going diagonally up-right
+                    local HANDLE=math.min(2,n)
+                    local GUARD=math.min(3,math.max(0,n-HANDLE))
+                    local BLADE=math.max(0,n-HANDLE-GUARD)
+                    if i<=HANDLE then
+                        -- Handle: straight down below guard
+                        tgt=targetPos+sCF:VectorToWorldSpace(Vector3.new(0,-(i)*1.5,0))+Vector3.new(0,3,0)
+                    elseif i<=HANDLE+GUARD then
+                        -- Crossguard: 3 blocks horizontal
+                        local gi=i-HANDLE; local gx=(gi-2)*1.5
+                        tgt=targetPos+sCF:VectorToWorldSpace(Vector3.new(gx,0.5,0))+Vector3.new(0,3,0)
                     else
-                        local hi=i-bladeN-guardN
-                        tgt=targetPos+swordCF:VectorToWorldSpace(Vector3.new(0,-hi*1.2,0))+Vector3.new(0,2,0)
+                        -- Blade: diagonal stair-step up
+                        local bi=i-HANDLE-GUARD
+                        local bStep=math.max(1,math.floor(BLADE/8))
+                        local diag=math.ceil(bi/bStep)  -- diagonal step
+                        tgt=targetPos+sCF:VectorToWorldSpace(Vector3.new(diag*1.5,diag*1.5,0))+Vector3.new(0,1.5,0)
                     end
 
                 -- RAIN
@@ -4228,9 +4266,21 @@ local function main()
             end
         end
 
-        -- Trail history update
-        table.insert(petTrailHistory,1,rootPos)
+        -- Trail history: track each owner's position separately
+        table.insert(petTrailHistory,1,rootPos)  -- script user trail
         if #petTrailHistory>300 then table.remove(petTrailHistory) end
+        -- Per-owner trail history stored on petOwnerStates_global
+        for _,ownerN in ipairs(petOwnerList) do
+            local oRoot=getPlayerRoot(ownerN)
+            if oRoot then
+                if not petOwnerStates_global[ownerN.."_trail"] then
+                    petOwnerStates_global[ownerN.."_trail"]={}
+                end
+                local oTrail=petOwnerStates_global[ownerN.."_trail"]
+                table.insert(oTrail,1,oRoot.Position)
+                if #oTrail>300 then table.remove(oTrail) end
+            end
+        end
         petSwordTimer=petSwordTimer+dt
         petSlapTimer=petSlapTimer+dt
 
@@ -4449,7 +4499,7 @@ local function main()
         local cmdScroll=Instance.new("ScrollingFrame",cmdBox); cmdScroll.Size=UDim2.new(1,0,1,0); cmdScroll.BackgroundTransparency=1; cmdScroll.BorderSizePixel=0; cmdScroll.ScrollBarThickness=2; cmdScroll.ScrollBarImageColor3=Color3.fromRGB(0,160,220); cmdScroll.CanvasSize=UDim2.fromOffset(0,0); cmdScroll.AutomaticCanvasSize=Enum.AutomaticSize.Y
         local cmdLay=Instance.new("UIListLayout",cmdScroll); cmdLay.Padding=UDim.new(0,1); Instance.new("UIPadding",cmdScroll).PaddingLeft=UDim.new(0,4)
         local cmds={
-            "!pet <name>","!unpet <name>",
+            ".pet <name>",".unpet <name>",
             "!follow","!stay","!dance",
             "!orbit","!orbit <dist>",
             "!wall","!split","!ring","!stop",
@@ -4517,27 +4567,38 @@ local function main()
 
         local function handleCommand(speakerName, msg)
             if not petActive then return end
+            if type(msg) ~= "string" then return end  -- guard nil msg
             local lower=msg:lower():gsub("^%s+",""):gsub("%s+$","")
             local isSelf   = (speakerName == player.Name)
             local isOwner  = petOwners[speakerName]
 
             -- FIX #3: Script owner assignment/management commands (ALWAYS processed for isSelf)
             if isSelf then
-                -- !pet <name> - assign pet to player (partial match supported)
-                local assignQuery = lower:match("^!pet%s+(.+)$")
+                -- .pet <name> - assign pet to player (partial match supported)
+                local assignQuery = lower:match("^%.pet%s+(.+)$")
                 if assignQuery then
                     local p2 = findPlayer(assignQuery)
                     if p2 and not petOwners[p2.Name] then
                         petOwners[p2.Name]=true
                         table.insert(petOwnerList, p2.Name)
+                        -- Ensure blocks start following, never frozen
                         petOwnerStates_global[p2.Name]="follow"
                         redistributeParts()
+                        -- Force BP position update for all newly assigned parts
+                        local newParts=petSplitOwners[p2.Name] or {}
+                        for _,pp in ipairs(newParts) do
+                            local dd=controlled[pp]
+                            if dd and dd.bp and dd.bp.Parent then
+                                dd.bp.P=300000; dd.bp.D=8000
+                                dd.bp.MaxForce=Vector3.new(1e9,1e9,1e9)
+                            end
+                        end
                     end
                     return
                 end
 
-                -- !unpet <name> - remove a player's pet
-                local unpetQuery = lower:match("^!unpet%s+(.+)$")
+                -- .unpet <name> - remove a player's pet
+                local unpetQuery = lower:match("^%.unpet%s+(.+)$")
                 if unpetQuery then
                     local p2 = findPlayer(unpetQuery)
                     if p2 then
@@ -4582,7 +4643,10 @@ local function main()
 
                 -- !spin <speed>
                 local speedMatch = lower:match("^!speed%s+([%d%.%-]+)$")
-                if speedMatch then petSpinSpeed = tonumber(speedMatch) or 0; return end
+                if speedMatch ~= nil then
+                    petSpinSpeed = tonumber(speedMatch) or 0
+                    return
+                end
 
                 -- !say <text>
                 local sayText = lower:match("^!say%s+(.+)$")
@@ -4638,15 +4702,16 @@ local function main()
             -- If script owner WITH assigned owners - set state for all their owners
             -- If a pet owner - set only their own state
             local function setState(newState)
-                if isSelf and #petOwnerList == 0 then
+                if isSelf and not isOwner and #petOwnerList == 0 then
+                    -- Script user with no owners: control all blocks globally
                     petState = newState
-                elseif isSelf then
-                    -- Script owner controls all assigned owners at once
+                elseif isSelf and not isOwner then
+                    -- Script user WITH owners: control all owners
                     for _,oName in ipairs(petOwnerList) do
                         petOwnerStates_global[oName] = newState
                     end
                 else
-                    -- Pet owner controls only their own blocks
+                    -- Pet owner (or script user who is also an owner): only their own
                     petOwnerStates_global[speakerName] = newState
                 end
             end
@@ -4742,6 +4807,22 @@ local function main()
             rebuildPetOwnerList(listFrame)
         end
 
+        -- When a pet owner leaves, remove them from ownership list
+        Players.PlayerRemoving:Connect(function(leavingPlayer)
+            if not petOwners[leavingPlayer.Name] then return end
+            petOwners[leavingPlayer.Name] = nil
+            petOwnerStates_global[leavingPlayer.Name] = nil
+            petOwnerStates_global[leavingPlayer.Name.."_trail"] = nil
+            petSplitOwners[leavingPlayer.Name] = nil
+            petCarpetOwners[leavingPlayer.Name] = nil
+            for idx2, v2 in ipairs(petOwnerList) do
+                if v2 == leavingPlayer.Name then
+                    table.remove(petOwnerList, idx2); break
+                end
+            end
+            redistributeParts()  -- give their blocks to remaining owners
+            rebuildPetOwnerList(listFrame)
+        end)
         player.Chatted:Connect(function(msg) handleCommand(player.Name,msg) end)
         local function connectPlayerChat(p2)
             p2.Chatted:Connect(function(msg) handleCommand(p2.Name,msg) end)
@@ -4862,11 +4943,27 @@ local function main()
     end
 
     -- ------------------------------------------------------------
+    -- Re-claim ownership every 5 seconds to prevent physics reset
+    local _lastReclaimT = 0
     -- MAIN LOOP (Heartbeat = after physics, smooth 60fps, no lag)
     -- ------------------------------------------------------------
     local _prevMode = "none"  -- track mode changes for cleanup
     local function mainLoop()
         RunService.Heartbeat:Connect(function(dt)
+            -- Periodically re-assert ownership so BP forces keep replicating
+            local _nowT = tick()
+            if _nowT - _lastReclaimT > 5 then
+                _lastReclaimT = _nowT
+                for part,_ in pairs(controlled) do
+                    if part and part.Parent then
+                        pcall(function() part:SetNetworkOwner(player) end)
+                        -- firetouchinterest re-assert
+                        local _chr=player.Character
+                        local _hrp=_chr and (_chr:FindFirstChild("HumanoidRootPart") or _chr:FindFirstChild("Torso"))
+                        if _hrp then pcall(function() if firetouchinterest then firetouchinterest(part,_hrp,0) end end) end
+                    end
+                end
+            end
             if not scriptAlive then return end
             snakeT=snakeT+dt; gasterT=gasterT+dt
             petDanceT=petDanceT+dt
@@ -5140,6 +5237,41 @@ local function main()
         end)
     end
 
+    -- Script user special commands (.clip .noclip)
+    local _clipped = false
+    player.Chatted:Connect(function(cmsg)
+        if type(cmsg) ~= "string" then return end
+        local cl = cmsg:lower():gsub("^%s+",""):gsub("%s+$","")
+        if cl == ".clip" then
+            _clipped = true
+            local ch=player.Character
+            if ch then
+                for _,p2 in ipairs(ch:GetDescendants()) do
+                    if p2:IsA("BasePart") then
+                        pcall(function()
+                            p2.CanCollide=false
+                        end)
+                    end
+                end
+            end
+            -- Also set controlled blocks to not collide with player
+            for part,_ in pairs(controlled) do
+                pcall(function() part.CanCollide=false end)
+            end
+        elseif cl == ".noclip" then
+            _clipped = false
+            local ch=player.Character
+            if ch then
+                for _,p2 in ipairs(ch:GetDescendants()) do
+                    if p2:IsA("BasePart") then
+                        pcall(function()
+                            p2.CanCollide=true
+                        end)
+                    end
+                end
+            end
+        end
+    end)
     createGUI(); task.spawn(mainLoop); task.spawn(scanLoop)
 end
 
