@@ -5238,37 +5238,82 @@ local function main()
     end
 
     -- Script user special commands (.clip .noclip)
+    -- .clip  = your character passes through unanchored blocks (no collision)
+    -- .noclip = restore collision
     local _clipped = false
+
+    -- On-screen indicator for clip state
+    local clipIndicator = Instance.new("ScreenGui")
+    clipIndicator.Name = "ClipIndicator"; clipIndicator.ResetOnSpawn = false
+    pcall(function() clipIndicator.Parent = player:WaitForChild("PlayerGui") end)
+    local clipLbl = Instance.new("TextLabel", clipIndicator)
+    clipLbl.Size = UDim2.fromOffset(120, 22)
+    clipLbl.Position = UDim2.new(1,-128,0,6)
+    clipLbl.BackgroundColor3 = Color3.fromRGB(0,0,0)
+    clipLbl.BackgroundTransparency = 0.4
+    clipLbl.TextColor3 = Color3.fromRGB(255,80,80)
+    clipLbl.TextSize = 11
+    clipLbl.Font = Enum.Font.GothamBold
+    clipLbl.Text = ""
+    clipLbl.Visible = false
+    Instance.new("UICorner", clipLbl).CornerRadius = UDim.new(0,4)
+
+    -- Heartbeat: continuously enforce CanCollide=false on character while clipped
+    -- (Roblox resets it every frame via character scripts so we must fight it)
+    RunService.Heartbeat:Connect(function()
+        if not _clipped then return end
+        local ch = player.Character
+        if not ch then return end
+        for _,p2 in ipairs(ch:GetDescendants()) do
+            if p2:IsA("BasePart") and p2.CanCollide then
+                pcall(function() p2.CanCollide = false end)
+            end
+        end
+    end)
+
     player.Chatted:Connect(function(cmsg)
         if type(cmsg) ~= "string" then return end
         local cl = cmsg:lower():gsub("^%s+",""):gsub("%s+$","")
         if cl == ".clip" then
             _clipped = true
+            clipLbl.Text = "CLIP ON"
+            clipLbl.TextColor3 = Color3.fromRGB(255,80,80)
+            clipLbl.Visible = true
+            -- Immediate application
             local ch=player.Character
             if ch then
                 for _,p2 in ipairs(ch:GetDescendants()) do
                     if p2:IsA("BasePart") then
-                        pcall(function()
-                            p2.CanCollide=false
-                        end)
+                        pcall(function() p2.CanCollide=false end)
                     end
                 end
-            end
-            -- Also set controlled blocks to not collide with player
-            for part,_ in pairs(controlled) do
-                pcall(function() part.CanCollide=false end)
             end
         elseif cl == ".noclip" then
             _clipped = false
+            clipLbl.Text = "CLIP OFF"
+            clipLbl.TextColor3 = Color3.fromRGB(80,255,80)
+            task.delay(2, function()
+                if not _clipped then clipLbl.Visible = false end
+            end)
+            -- Restore character collision
             local ch=player.Character
             if ch then
                 for _,p2 in ipairs(ch:GetDescendants()) do
                     if p2:IsA("BasePart") then
-                        pcall(function()
-                            p2.CanCollide=true
-                        end)
+                        pcall(function() p2.CanCollide=true end)
                     end
                 end
+            end
+        end
+    end)
+
+    -- Re-apply clip when character respawns
+    player.CharacterAdded:Connect(function(newChar)
+        if not _clipped then return end
+        task.wait(0.5)
+        for _,p2 in ipairs(newChar:GetDescendants()) do
+            if p2:IsA("BasePart") then
+                pcall(function() p2.CanCollide=false end)
             end
         end
     end)
