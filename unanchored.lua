@@ -2194,8 +2194,40 @@ local function releaseAll()
 end
 
 sweepMap=function()
-    for _,obj in ipairs(workspace:GetDescendants())do
-        if isValid(obj) and not controlled[obj]then grabPart(obj)end
+    -- Comprehensive scan: finds EVERY unanchored block in the ENTIRE workspace
+    -- SetNetworkOwner makes us the physics authority so nobody else can drag them
+    -- Our BodyPosition (MaxForce=1e9) overrides the drag tool's force (~5000)
+    local char=player.Character
+    local hrp=char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso"))
+    local grabbed=0
+    for _,obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("BasePart") and not obj.Anchored
+           and obj.Parent and obj.Size.Magnitude >= 0.1
+           and not controlled[obj] then
+            -- Skip humanoid character parts
+            local isChar=false; local pp=obj.Parent
+            while pp and pp~=workspace do
+                if pp:FindFirstChildOfClass("Humanoid") then isChar=true; break end
+                pp=pp.Parent
+            end
+            if not isChar then
+                -- Step 1: SetNetworkOwner (Delta CAN call this from LocalScript context)
+                -- This makes our client the physics authority for this part
+                pcall(function() obj:SetNetworkOwner(player) end)
+                -- Step 2: Reduce mass so our BP forces dominate
+                pcall(function()
+                    obj.CanCollide=false
+                    obj.Massless=true
+                    obj.CustomPhysicalProperties=PhysicalProperties.new(0.01,0.3,0.5,1,1)
+                end)
+                -- Step 3: grabPart attaches BodyPosition (MaxForce=1e9 > drag tool ~5000)
+                -- This makes the block resist being grabbed by other players
+                grabPart(obj)
+                grabbed=grabbed+1
+                -- Yield every 100 parts to avoid freezing
+                if grabbed%100==0 then task.wait() end
+            end
+        end
     end
 end
 
@@ -3272,34 +3304,85 @@ local function deactivateDeInfinity()
     for part,_ in pairs(controlled) do pcall(function() part.CanCollide=false end) end
 end
 
-local function detectAllPartsForGojo()
+local function detectAllPartsForGojo(statusLbl)
+    -- Collect ALL unanchored non-character parts first
+    local toGrab = {}
     for _,obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("BasePart") and not obj.Anchored and not controlled[obj]
-           and obj.Parent and obj.Size.Magnitude >= 0.2 and obj.Transparency < 1 then
-            local isChar=false; local pp=obj.Parent
-            while pp and pp~=workspace do
-                if pp:FindFirstChildOfClass("Humanoid") then isChar=true; break end
-                pp=pp.Parent
+        if obj:IsA("BasePart") and not obj.Anchored
+           and obj.Parent and obj.Size.Magnitude >= 0.1
+           and obj.Transparency < 1 and not controlled[obj] then
+            local isChar = false
+            local pp = obj.Parent
+            while pp and pp ~= workspace do
+                if pp:FindFirstChildOfClass("Humanoid") then
+                    isChar = true; break
+                end
+                pp = pp.Parent
             end
             if not isChar then
-                pcall(function() obj.CanCollide=false end)
-                claimOwnership(obj)  -- firetouchinterest + SetNetworkOwner + massless
-                if not controlled[obj] then
-                    local origCC=obj.CanCollide; local origAnch=obj.Anchored
-                    local origM=obj.Massless; local origPP=obj.CustomPhysicalProperties
-                    local bp=Instance.new("BodyPosition")
-                    bp.MaxForce=Vector3.new(1e9,1e9,1e9); bp.P=300000; bp.D=8000
-                    bp.Position=obj.Position; bp.Parent=obj
-                    local bg=Instance.new("BodyGyro")
-                    bg.MaxTorque=Vector3.new(1e9,1e9,1e9); bg.P=300000; bg.D=8000
-                    bg.CFrame=obj.CFrame; bg.Parent=obj
-                    controlled[obj]={origCC=origCC,origAnch=origAnch,bp=bp,bg=bg,
-                        origColor=obj.Color,origMaterial=obj.Material,
-                        origMassless=origM,origPhysProps=origPP}
-                    partCount=partCount+1
-                end
+                table.insert(toGrab, obj)
             end
         end
+    end
+
+    local total = #toGrab
+    local grabbed = 0
+
+    -- Process in batches of 50 so game doesn't freeze
+    local char = player.Character
+    local hrp  = char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso"))
+
+    for idx, obj in ipairs(toGrab) do
+        if obj and obj.Parent then
+            -- firetouchinterest: tells the server this client is interacting with the part
+            -- This is the key to getting real network ownership in Delta
+            if hrp then
+                pcall(function()
+                    if firetouchinterest then
+                        firetouchinterest(obj, hrp, 0)
+                        firetouchinterest(obj, hrp, 2)
+                    end
+                end)
+            end
+            -- SetNetworkOwner as fallback
+            pcall(function() obj:SetNetworkOwner(player) end)
+            -- Near-zero mass
+            pcall(function()
+                obj.CanCollide = false
+                obj.Massless   = true
+                obj.CustomPhysicalProperties = PhysicalProperties.new(0.01,0.3,0.5,1,1)
+            end)
+
+            if not controlled[obj] then
+                local origCC  = obj.CanCollide
+                local origAnch= obj.Anchored
+                local origM   = obj.Massless
+                local origPP  = obj.CustomPhysicalProperties
+                local bp = Instance.new("BodyPosition")
+                bp.MaxForce = Vector3.new(1e9,1e9,1e9); bp.P=300000; bp.D=8000
+                bp.Position = obj.Position; bp.Parent = obj
+                local bg = Instance.new("BodyGyro")
+                bg.MaxTorque = Vector3.new(1e9,1e9,1e9); bg.P=300000; bg.D=8000
+                bg.CFrame = obj.CFrame; bg.Parent = obj
+                controlled[obj] = {
+                    origCC=origCC, origAnch=origAnch, bp=bp, bg=bg,
+                    origColor=obj.Color, origMaterial=obj.Material,
+                    origMassless=origM, origPhysProps=origPP
+                }
+                partCount = partCount + 1
+                grabbed   = grabbed + 1
+            end
+
+            -- Update status label every 50 parts so UI stays responsive
+            if idx % 50 == 0 and statusLbl then
+                statusLbl.Text = "DETECTING: "..idx.."/"..total
+                task.wait()  -- yield to prevent freeze
+            end
+        end
+    end
+
+    if statusLbl then
+        statusLbl.Text = "DETECTED: "..grabbed.." new ("..partCount.." total)"
     end
 end
 
@@ -4956,11 +5039,14 @@ local function main()
                 _lastReclaimT = _nowT
                 for part,_ in pairs(controlled) do
                     if part and part.Parent then
+                        -- Re-assert network ownership so nobody can steal our blocks
                         pcall(function() part:SetNetworkOwner(player) end)
-                        -- firetouchinterest re-assert
-                        local _chr=player.Character
-                        local _hrp=_chr and (_chr:FindFirstChild("HumanoidRootPart") or _chr:FindFirstChild("Torso"))
-                        if _hrp then pcall(function() if firetouchinterest then firetouchinterest(part,_hrp,0) end end) end
+                        -- Also re-assert BP MaxForce in case something reset it
+                        local _d=controlled[part]
+                        if _d and _d.bp and _d.bp.Parent then
+                            _d.bp.MaxForce=Vector3.new(1e9,1e9,1e9)
+                            _d.bp.P=300000
+                        end
                     end
                 end
             end
@@ -5227,7 +5313,16 @@ local function main()
         local scanBtn=sBtn3("SCAN PARTS", Color3.fromRGB(18,55,20),Color3.fromRGB(80,255,120),12)
         local relBtn =sBtn3("RELEASE ALL",Color3.fromRGB(55,30,8), Color3.fromRGB(255,155,55),13)
         local deaBtn =sBtn3("DEACTIVATE", Color3.fromRGB(70,8,8),  Color3.fromRGB(255,55,55), 14)
-        scanBtn.MouseButton1Click:Connect(function()sweepMap()end)
+        scanBtn.MouseButton1Click:Connect(function()
+            task.spawn(function()
+                local prevText=scanBtn.Text
+                scanBtn.Text="SCANNING..."
+                sweepMap()
+                scanBtn.Text="SCANNED: "..partCount
+                task.wait(2)
+                scanBtn.Text=prevText
+            end)
+        end)
         relBtn.MouseButton1Click:Connect(function()releaseAll();activeMode="none";isActivated=false;modLbl.Text="MODE: NONE"end)
         deaBtn.MouseButton1Click:Connect(function()releaseAll();scriptAlive=false;gui:Destroy();local icon=pg:FindFirstChild("ManipIcon");if icon then icon:Destroy()end end)
         closeBtn.MouseButton1Click:Connect(function()
@@ -5317,6 +5412,65 @@ local function main()
             end
         end
     end)
+    -- Touch-to-grab: when player taps/touches any unanchored block,
+    -- automatically grab it (firetouchinterest + SetNetworkOwner + BP)
+    UserInputService.TouchStarted:Connect(function(touch, processed)
+        if processed then return end
+        task.wait()  -- wait one frame so camera is updated
+        local cam = workspace.CurrentCamera
+        if not cam then return end
+        local ray = cam:ScreenPointToRay(touch.Position.X, touch.Position.Y)
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        local char = player.Character
+        if char then params.FilterDescendantsInstances = {char} end
+        local result = workspace:Raycast(ray.Origin, ray.Direction * 500, params)
+        if result and result.Instance then
+            local part = result.Instance
+            if part:IsA("BasePart") and not part.Anchored and not controlled[part] then
+                local isChar2 = false
+                local pp2 = part.Parent
+                while pp2 and pp2 ~= workspace do
+                    if pp2:FindFirstChildOfClass("Humanoid") then isChar2=true; break end
+                    pp2 = pp2.Parent
+                end
+                if not isChar2 then
+                    claimOwnership(part)
+                    grabPart(part)
+                end
+            end
+        end
+    end)
+
+    -- Mouse click-to-grab (PC support)
+    UserInputService.InputBegan:Connect(function(inp, processed)
+        if processed then return end
+        if inp.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+        local cam = workspace.CurrentCamera
+        if not cam then return end
+        local ray = cam:ScreenPointToRay(inp.Position.X, inp.Position.Y)
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        local char = player.Character
+        if char then params.FilterDescendantsInstances = {char} end
+        local result = workspace:Raycast(ray.Origin, ray.Direction * 500, params)
+        if result and result.Instance then
+            local part = result.Instance
+            if part:IsA("BasePart") and not part.Anchored and not controlled[part] then
+                local isChar2 = false
+                local pp2 = part.Parent
+                while pp2 and pp2 ~= workspace do
+                    if pp2:FindFirstChildOfClass("Humanoid") then isChar2=true; break end
+                    pp2 = pp2.Parent
+                end
+                if not isChar2 then
+                    claimOwnership(part)
+                    grabPart(part)
+                end
+            end
+        end
+    end)
+
     createGUI(); task.spawn(mainLoop); task.spawn(scanLoop)
 end
 
