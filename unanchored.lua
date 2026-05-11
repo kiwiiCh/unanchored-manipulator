@@ -4003,7 +4003,7 @@ local function main()
             end
         end
 
-        local function moveParts(parts, targetPos, orbitDist, orbitT, mode2)
+        local function moveParts(parts, targetPos, orbitDist, orbitT, mode2, ownerName)
             orbitT = orbitT * (1 + math.max(0, petSpinSpeed))
             local n=math.max(#parts,1)
             for i,part in ipairs(parts) do
@@ -4138,17 +4138,16 @@ local function main()
 
                 -- TRAIL
                 elseif mode2=="trail" then
-                    -- Use the OWNER's trail history (not the script user's)
-                    local ownerKey=nil
-                    for _,owN in ipairs(petOwnerList) do
-                        local owParts=petSplitOwners[owN]
-                        if owParts then
-                            for _,pp in ipairs(owParts) do if pp==part then ownerKey=owN; break end end
-                        end
-                        if ownerKey then break end
+                    -- ownerName passed directly from updatePet - get their specific trail
+                    local trailSrc
+                    if ownerName then
+                        trailSrc = petOwnerStates_global[ownerName.."_trail"]
                     end
-                    local trailSrc=(ownerKey and petOwnerStates_global[ownerKey.."_trail"]) or petTrailHistory
-                    local idx2=math.clamp(i*3,1,math.max(1,#trailSrc))
+                    -- Fall back to script user's trail if owner has no history yet
+                    if not trailSrc or #trailSrc == 0 then
+                        trailSrc = petTrailHistory
+                    end
+                    local idx2=math.clamp(i*3, 1, math.max(1,#trailSrc))
                     tgt=(trailSrc[idx2] or targetPos)+Vector3.new(0,1,0)
 
                 -- WINGS: exact same as main wings mode using getWingCF
@@ -4432,7 +4431,7 @@ local function main()
         if #petOwnerList==0 then
             local arr={}
             for part,_ in pairs(controlled) do if part and part.Parent then table.insert(arr,part) end end
-            moveParts(arr,rootPos,petOrbitDist,t,petState)
+            moveParts(arr,rootPos,petOrbitDist,t,petState,nil)  -- nil=script user, no named trail
             if petState=="guard" then doPetGuard(rootPos) end
             if petState=="attack" and not petAttackFired then doPetAttackFling() end
             if petState=="carpet" then applyCarpetBoost(player.Name) else removeCarpetBoost(player.Name) end
@@ -4441,7 +4440,7 @@ local function main()
             local tpos=root2 and root2.Position or rootPos
             local ownerState=petOwnerStates_global[petOwnerList[1]] or petState
             local arr=getParts(petOwnerList[1])
-            moveParts(arr,tpos,petOrbitDist,t,ownerState)
+            moveParts(arr,tpos,petOrbitDist,t,ownerState,petOwnerList[1])  -- pass owner name for trail
             if ownerState=="guard" then doPetGuard(tpos) end
             if ownerState=="attack" and not petAttackFired then doPetAttackFling() end
             if ownerState=="carpet" then applyCarpetBoost(petOwnerList[1]) else removeCarpetBoost(petOwnerList[1]) end
@@ -4451,7 +4450,7 @@ local function main()
                 local tpos=root2 and root2.Position or rootPos
                 local ownerState=petOwnerStates_global[ownerName] or petState
                 local arr=getParts(ownerName)
-                moveParts(arr,tpos,petOrbitDist,t,ownerState)
+                moveParts(arr,tpos,petOrbitDist,t,ownerState,ownerName)  -- pass owner name for trail
                 if ownerState=="guard" then doPetGuard(tpos) end
                 if ownerState=="carpet" then applyCarpetBoost(ownerName) else removeCarpetBoost(ownerName) end
             end
